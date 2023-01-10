@@ -40,7 +40,7 @@ def pattern(regex: str) -> Callable[[str], bool]:
 
 
 @typeguard.typechecked
-def extract(string: str, location: clingo.ast.Location) -> str:
+def extract_parsed_string(string: str, location: clingo.ast.Location) -> str:
     lines = string.split('\n')
     res = []
     if location.begin.line == location.end.line:

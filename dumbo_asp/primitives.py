@@ -256,9 +256,13 @@ class SymbolicAtom:
 @dataclasses.dataclass(frozen=True)
 class SymbolicRule:
     value: clingo.ast.AST
-    parsed_string: Optional[str]
+    __parsed_string: Optional[str]
 
-    def __post_init__(self):
+    key: InitVar[Any]
+    __key = object()
+
+    def __post_init__(self, key: Any):
+        validate("key", key, equals=self.__key, help_msg="Use a factory method")
         validate("type", self.value.ast_type, equals=clingo.ast.ASTType.Rule)
 
     @staticmethod
@@ -266,10 +270,11 @@ class SymbolicRule:
         program = Parser.parse_program(string)
         validate("one rule", program, length=1,
                  help_msg=f"Unexpected sequence of {len(program)} rules in {utils.one_line(string)}")
-        return SymbolicRule(program[0], string)
+        return SymbolicRule(program[0], utils.extract_parsed_string(string, program[0].location),
+                            key=SymbolicRule.__key)
 
     def __str__(self):
-        return str(self.value)
+        return str(self.value) if self.__parsed_string is None else self.__parsed_string
 
 
 @typeguard.typechecked

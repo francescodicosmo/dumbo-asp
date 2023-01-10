@@ -73,8 +73,10 @@ def test_ground_atom_order():
     "a :- b.",
     "a(X) :- b(X).",
     "a(X) :- b(Y).",
+    "a\n\t:- b.",
+    "a :- b( 1 ).",
 ])
-def test_parse_valid_rule(rule):
+def test_parse_valid_symbolic_rule(rule):
     assert str(SymbolicRule.parse(rule)) == rule
 
 
@@ -82,7 +84,7 @@ def test_parse_valid_rule(rule):
     "a :- b.\na(X) :- b(X).",
     "a(X) :- b(.",
 ])
-def test_parse_invalid_rule(rule):
+def test_parse_invalid_symbolic_rule(rule):
     with pytest.raises(ValueError):
         SymbolicRule.parse(rule)
 
