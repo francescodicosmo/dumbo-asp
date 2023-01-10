@@ -156,3 +156,12 @@ def test_model_as_facts():
 
 def test_model_block_up():
     assert Model.of_atoms("a", "b").block_up == ":- a, b."
+
+
+def test_model_project():
+    assert Model.of_atoms("a(1,2,3)").project(Predicate.parse("a/3"), 1).as_facts == "a(2,3)."
+
+
+def test_model_substitute():
+    assert Model.of_atoms("a(1,2,3)").substitute(Predicate.parse("a/3"), 1, Parser.parse_ground_term("5")).as_facts == \
+           "a(5,2,3)."

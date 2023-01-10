@@ -383,7 +383,7 @@ class Model:
             if not predicate.match(atom.predicate):
                 return atom
             return GroundAtom(clingo.Function(
-                atom.name,
+                atom.predicate_name,
                 [arg if index != argument else term for index, arg in enumerate(atom.arguments, start=1)]
             ))
         return self.map(mapping)
@@ -395,7 +395,7 @@ class Model:
             if not predicate.match(atom.predicate):
                 return atom
             return GroundAtom(clingo.Function(
-                atom.name,
+                atom.predicate_name,
                 [arg for index, arg in enumerate(atom.arguments, start=1) if index != argument]
             ))
         return self.map(mapping)
