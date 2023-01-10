@@ -280,6 +280,14 @@ class Model:
 
     __key = object()
 
+    class NoModelError(ValueError):
+        def __init__(self, *args):
+            super().__init__("no stable model", *args)
+
+    class MultipleModelsError(ValueError):
+        def __init__(self, *args):
+            super().__init__("more than one stable model", *args)
+
     @staticmethod
     def empty():
         return Model(key=Model.__key, value=())
@@ -301,9 +309,9 @@ class Model:
 
         control.solve(on_model=on_model)
         if on_model.res is None:
-            raise ValueError("no stable model")
+            raise Model.NoModelError
         if on_model.exception:
-            raise ValueError("more than one stable model")
+            raise Model.MultipleModelsError
         return on_model.res
 
     @staticmethod
