@@ -1,3 +1,4 @@
+import clingo
 import pytest
 
 from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule
@@ -120,3 +121,38 @@ def test_model_drop():
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("b"))) == 3
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("a"))) == 2
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("a/2"))) == 3
+
+
+def test_model_of_control():
+    control = clingo.Control()
+    control.add("base", [], "c. a. b.")
+    control.ground([("base", [])])
+    model = Model.of(control)
+    assert len(model) == 3
+    assert model[0].predicate == Predicate.parse("a/0")
+    assert model[1].predicate == Predicate.parse("b/0")
+    assert model[2].predicate == Predicate.parse("c/0")
+
+
+def test_no_model():
+    control = clingo.Control()
+    control.add("base", [], "a :- not a.")
+    control.ground([("base", [])])
+    with pytest.raises(ValueError):
+        Model.of(control)
+
+
+def test_model_of_control_cannot_be_used_for_more_than_one_model():
+    control = clingo.Control(["0"])
+    control.add("base", [], "{a}.")
+    control.ground([("base", [])])
+    with pytest.raises(ValueError):
+        Model.of(control)
+
+
+def test_model_as_facts():
+    assert Model.of_atoms("a", "b", "c").as_facts == "a.\nb.\nc."
+
+
+def test_model_block_up():
+    assert Model.of_atoms("a", "b").block_up == ":- a, b."

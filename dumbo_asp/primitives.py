@@ -180,6 +180,14 @@ class GroundAtom:
     def predicate(self) -> Predicate:
         return Predicate.of(self.value)
 
+    @property
+    def predicate_name(self) -> str:
+        return self.predicate.name
+
+    @property
+    def predicate_arity(self) -> int:
+        return self.predicate.arity
+
     @cached_property
     def arguments(self) -> tuple[clingo.Symbol, ...]:
         return tuple(self.value.arguments)
@@ -187,6 +195,9 @@ class GroundAtom:
     @property
     def strongly_negated(self) -> bool:
         return self.value.negative
+
+    def __str__(self):
+        return str(self.value)
 
     def __lt__(self, other: "GroundAtom"):
         if self.predicate < other.predicate:
