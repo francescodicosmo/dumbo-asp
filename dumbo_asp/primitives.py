@@ -303,11 +303,7 @@ class Model:
             if on_model.cost is not None and on_model.cost <= model.cost:
                 on_model.exception = True
             on_model.cost = model.cost
-            atoms = [GroundAtom(x) for x in model.symbols(shown=True)]
-            on_model.res = Model(
-                key=Model.__key,
-                value=tuple(sorted(atoms)),
-            )
+            on_model.res = Model.of_elements(model.symbols(shown=True))
         on_model.cost = None
         on_model.res = None
         on_model.exception = False
@@ -362,7 +358,13 @@ class Model:
                 flattened.append(built_element)
             else:
                 flattened.extend(build(atom) for atom in element)
-        return Model(key=Model.__key, value=tuple(flattened))
+        return Model(
+            key=Model.__key,
+            value=
+            tuple(sorted(x for x in flattened if type(x) is int)) +
+            tuple(sorted(x for x in flattened if type(x) is str)) +
+            tuple(sorted(x for x in flattened if type(x) is GroundAtom))
+        )
 
     def __post_init__(self, key: Any):
         validate("create key", key, equals=self.__key, help_msg="Use a factory method.")

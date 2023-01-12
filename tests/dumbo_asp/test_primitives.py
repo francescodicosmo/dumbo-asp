@@ -139,6 +139,15 @@ def test_model_of_control():
     assert model[2].predicate == Predicate.parse("c/0")
 
 
+def test_model_of_control_with_show_numbers():
+    control = clingo.Control()
+    control.add("base", [], "#show 1.")
+    control.ground([("base", [])])
+    model = Model.of_control(control)
+    assert len(model) == 1
+    assert model[0] == 1
+
+
 def test_no_model():
     control = clingo.Control()
     control.add("base", [], "a :- not a.")
