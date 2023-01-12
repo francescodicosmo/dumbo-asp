@@ -10,7 +10,7 @@ import clingo.ast
 import typeguard
 
 from dumbo_asp import utils
-from dumbo_asp.utils import validate
+from dumbo_asp.utils import validate, ValidationError
 
 
 @typeguard.typechecked
@@ -82,18 +82,18 @@ class Parser:
 
     @staticmethod
     def parse_program(string: str) -> list[clingo.ast.AST]:
-        res = []
         def callback(ast):
-            res.append(ast)
+            callback.res.append(ast)
+        callback.res = []
 
         messages = []
         try:
             clingo.ast.parse_string(string, callback, logger=lambda code, message: messages.append((code, message)))
-            validate("nonempty res", res, min_len=1)
-            validate("base program", res[0].ast_type == clingo.ast.ASTType.Program and res[0].name == "base" and
-                     len(res[0].parameters) == 0, equals=True)
-            validate("only rules", [x for x in res[1:] if x.ast_type != clingo.ast.ASTType.Rule], empty=True)
-            return res[1:]
+            validate("nonempty res", callback.res, min_len=1)
+            validate("base program", callback.res[0].ast_type == clingo.ast.ASTType.Program and
+                     callback.res[0].name == "base" and len(callback.res[0].parameters) == 0, equals=True)
+            validate("only rules", [x for x in callback.res[1:] if x.ast_type != clingo.ast.ASTType.Rule], empty=True)
+            return callback.res[1:]
         except RuntimeError:
             errors = [message[1] for message in messages if message[0] == clingo.MessageCode.RuntimeError]
             validate("errors", messages, length=1)
@@ -281,7 +281,7 @@ class SymbolicRule:
 @dataclasses.dataclass(frozen=True, order=True)
 class Model:
     key: dataclasses.InitVar[Any]
-    value: tuple[GroundAtom, ...]
+    value: tuple[GroundAtom | int | str, ...]
 
     __key = object()
 
@@ -298,7 +298,7 @@ class Model:
         return Model(key=Model.__key, value=())
 
     @staticmethod
-    def of(control: clingo.Control) -> "Model":
+    def of_control(control: clingo.Control) -> "Model":
         def on_model(model):
             if on_model.cost is not None and on_model.cost <= model.cost:
                 on_model.exception = True
@@ -324,18 +324,35 @@ class Model:
         control = clingo.Control()
         control.add("base", [], program)
         control.ground([("base", [])])
-        return Model.of(control)
+        return Model.of_control(control)
 
     @staticmethod
     def of_atoms(*args: Union[str, clingo.Symbol, GroundAtom,
                               Iterable[Union[str, clingo.Symbol, GroundAtom]]]) -> "Model":
+        res = Model.of_elements(*args)
+        validate("only atoms", res.contains_only_ground_atoms, equals=True,
+                 help_msg="Use Model.of_elements() to create a model with numbers and strings")
+        return res
+
+    @staticmethod
+    def of_elements(*args: Union[int, str, clingo.Symbol, GroundAtom,
+                    Iterable[Union[int, str, clingo.Symbol, GroundAtom]]]) -> "Model":
         def build(atom):
-            if type(atom) is GroundAtom:
+            if type(atom) in [GroundAtom, int]:
                 return atom
             if type(atom) is clingo.Symbol:
+                if atom.type == clingo.SymbolType.Number:
+                    return atom.number
+                if atom.type == clingo.SymbolType.String:
+                    return atom.string
                 return GroundAtom(atom)
             if type(atom) is str:
-                return GroundAtom.parse(atom)
+                try:
+                    return GroundAtom.parse(atom)
+                except ValidationError:
+                    if atom[0] == '"' == atom[-1]:
+                        return Parser.parse_ground_term(atom).string
+                    return Parser.parse_ground_term(f'"{atom}"').string
             return None
 
         flattened = []
@@ -362,12 +379,30 @@ class Model:
     def __iter__(self):
         return self.value.__iter__()
 
+    @cached_property
+    def contains_only_ground_atoms(self) -> bool:
+        return all(type(element) == GroundAtom for element in self)
+
     @property
     def as_facts(self) -> str:
-        return '\n'.join(f"{atom}." for atom in self)
+        def build(element):
+            if type(element) is int:
+                return f"__number({element})."
+            if type(element) is str:
+                return f"__string(\"{element}\")."
+            return f"{element}."
+        return '\n'.join(build(element) for element in self)
 
-    def drop(self, predicate: Predicate) -> "Model":
-        return Model(key=self.__key, value=tuple(atom for atom in self if not predicate.match(atom.predicate)))
+    def drop(self, predicate: Optional[Predicate] = None, numbers: bool = False, strings: bool = False) -> "Model":
+        def when(element):
+            if type(element) is GroundAtom:
+                return predicate is None or not predicate.match(element.predicate)
+            if type(element) is int:
+                return not numbers
+            assert type(element) is str
+            return not strings
+
+        return self.filter(when)
 
     def filter(self, when: Callable[[GroundAtom], bool]) -> "Model":
         return Model(key=self.__key, value=tuple(atom for atom in self if when(atom)))
@@ -378,8 +413,9 @@ class Model:
     def rename(self, predicate: Predicate, new_name: Predicate) -> "Model":
         validate("same arity", predicate.arity == new_name.arity, equals=True,
                  help_msg="Predicates must have the same arity")
-        return self.map(lambda atom: atom if not predicate.match(atom.predicate)
-            else GroundAtom(clingo.Function(new_name.name, atom.arguments)))
+        return self.map(lambda atom: atom if not predicate.match(atom.predicate) else GroundAtom(
+            clingo.Function(new_name.name, atom.arguments)
+        ))
 
     def substitute(self, predicate: Predicate, argument: int, term: clingo.Symbol) -> "Model":
         validate("argument", argument, min_value=1, max_value=predicate.arity, help_msg="Arguments are indexed from 1")

@@ -123,13 +123,16 @@ def test_model_drop():
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("b"))) == 3
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("a"))) == 2
     assert len(Model.of_atoms("a(1)", "a(1,2)", "b(1)", "c(2)").drop(Predicate.parse("a/2"))) == 3
+    assert len(Model.of_elements("a(1)", "1", '"a(1)"').drop(Predicate.parse("a/1"))) == 2
+    assert len(Model.of_elements("a(1)", "1", 2, '"a(1)"').drop(numbers=True)) == 3
+    assert len(Model.of_elements("a(1)", "1", 2, '"a(1)"').drop(numbers=True, strings=True)) == 1
 
 
 def test_model_of_control():
     control = clingo.Control()
     control.add("base", [], "c. a. b.")
     control.ground([("base", [])])
-    model = Model.of(control)
+    model = Model.of_control(control)
     assert len(model) == 3
     assert model[0].predicate == Predicate.parse("a/0")
     assert model[1].predicate == Predicate.parse("b/0")
@@ -141,7 +144,7 @@ def test_no_model():
     control.add("base", [], "a :- not a.")
     control.ground([("base", [])])
     with pytest.raises(ValueError):
-        Model.of(control)
+        Model.of_control(control)
 
 
 def test_model_of_control_cannot_be_used_for_more_than_one_model():
@@ -149,7 +152,7 @@ def test_model_of_control_cannot_be_used_for_more_than_one_model():
     control.add("base", [], "{a}.")
     control.ground([("base", [])])
     with pytest.raises(ValueError):
-        Model.of(control)
+        Model.of_control(control)
 
 
 def test_model_as_facts():
@@ -167,3 +170,11 @@ def test_model_project():
 def test_model_substitute():
     assert Model.of_atoms("a(1,2,3)").substitute(Predicate.parse("a/3"), 1, Parser.parse_ground_term("5")).as_facts == \
            "a(5,2,3)."
+
+
+def test_model_of_elements():
+    assert Model.of_elements(1, "2", "\"3\"").as_facts == """
+__number(1).
+__string(\"2\").
+__string(\"3\").
+    """.strip()
