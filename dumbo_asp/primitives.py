@@ -316,9 +316,15 @@ class Model:
         return on_model.res
 
     @staticmethod
-    def of_program(program: str) -> "Model":
+    def of_program(*args: str | Iterable[str]) -> "Model":
+        program = []
+        for arg in args:
+            if type(arg) is str:
+                program.append(arg)
+            else:
+                program.extend(arg)
         control = clingo.Control()
-        control.add("base", [], program)
+        control.add("base", [], '\n'.join(program))
         control.ground([("base", [])])
         return Model.of_control(control)
 
