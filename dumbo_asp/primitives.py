@@ -10,7 +10,7 @@ import clingo.ast
 import typeguard
 
 from dumbo_asp import utils
-from dumbo_asp.utils import validate, ValidationError
+from dumbo_utils.validation import validate, ValidationError
 
 
 @typeguard.typechecked
