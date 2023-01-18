@@ -3,14 +3,15 @@ import functools
 import math
 from dataclasses import InitVar
 from functools import cached_property
-from typing import Any, Callable, Optional, Iterable, Union
+from typing import Callable, Optional, Iterable, Union
 
 import clingo
 import clingo.ast
 import typeguard
+from dumbo_utils.primitives import PrivateKey
+from dumbo_utils.validation import validate, ValidationError
 
 from dumbo_asp import utils
-from dumbo_utils.validation import validate, ValidationError
 
 
 @typeguard.typechecked
@@ -23,11 +24,11 @@ class Parser:
         end: int
         message: str
 
-        key: InitVar[Any]
-        __key = object()
+        key: InitVar[PrivateKey]
+        __key = PrivateKey()
 
-        def __post_init__(self, key: Any):
-            validate("key", key, equals=self.__key, help_msg="Use a factory method")
+        def __post_init__(self, key: PrivateKey):
+            self.__key.validate(key)
 
         @staticmethod
         def parse(error: str, parsed_string: str) -> "Parser.Error":
@@ -106,13 +107,13 @@ class Parser:
 class Predicate:
     name: str
     arity: Optional[int]
-    key: InitVar[Any]
+    key: InitVar[PrivateKey]
 
-    __key = object()
+    __key = PrivateKey()
     MAX_ARITY = 999
 
-    def __post_init__(self, key: Any):
-        validate("key", key, equals=self.__key, help_msg="Use a factory method")
+    def __post_init__(self, key: PrivateKey):
+        self.__key.validate(key)
 
     @staticmethod
     def parse(name: str, arity: Optional[int] = None) -> "Predicate":
@@ -258,11 +259,11 @@ class SymbolicRule:
     value: clingo.ast.AST
     __parsed_string: Optional[str]
 
-    key: InitVar[Any]
-    __key = object()
+    key: InitVar[PrivateKey]
+    __key = PrivateKey()
 
-    def __post_init__(self, key: Any):
-        validate("key", key, equals=self.__key, help_msg="Use a factory method")
+    def __post_init__(self, key: PrivateKey):
+        self.__key.validate(key)
         validate("type", self.value.ast_type, equals=clingo.ast.ASTType.Rule)
 
     @staticmethod
@@ -280,10 +281,10 @@ class SymbolicRule:
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True, order=True)
 class Model:
-    key: dataclasses.InitVar[Any]
+    key: InitVar[PrivateKey]
     value: tuple[GroundAtom | int | str, ...]
 
-    __key = object()
+    __key = PrivateKey()
 
     class NoModelError(ValueError):
         def __init__(self, *args):
@@ -372,8 +373,8 @@ class Model:
             tuple(sorted(x for x in flattened if type(x) is GroundAtom))
         )
 
-    def __post_init__(self, key: Any):
-        validate("create key", key, equals=self.__key, help_msg="Use a factory method.")
+    def __post_init__(self, key: PrivateKey):
+        self.__key.validate(key)
 
     def __str__(self):
         return ' '.join(str(x) for x in self.value)
