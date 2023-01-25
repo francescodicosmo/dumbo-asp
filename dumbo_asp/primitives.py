@@ -3,7 +3,7 @@ import functools
 import math
 from dataclasses import InitVar
 from functools import cached_property
-from typing import Callable, Optional, Iterable, Union
+from typing import Callable, Optional, Iterable, Union, Any
 
 import clingo
 import clingo.ast
@@ -274,8 +274,97 @@ class SymbolicRule:
         return SymbolicRule(program[0], utils.extract_parsed_string(string, program[0].location),
                             key=SymbolicRule.__key)
 
+    @staticmethod
+    def of(value: clingo.ast.AST, parsed_string: Optional[str] = None) -> "SymbolicRule":
+        validate("value", value.ast_type == clingo.ast.ASTType.Rule, equals=True)
+        return SymbolicRule(value, parsed_string, key=SymbolicRule.__key)
+
     def __str__(self):
         return str(self.value) if self.__parsed_string is None else self.__parsed_string
+
+    def transform(self, transformer: clingo.ast.Transformer) -> Any:
+        transformer(self.value)
+
+    @cached_property
+    def head_variables(self) -> tuple[str, ...]:
+        res = set()
+
+        class Transformer(clingo.ast.Transformer):
+            def visit_Variable(self, node):
+                res.add(str(node))
+                return node
+
+        Transformer().visit(self.value.head)
+        return tuple(sorted(res))
+
+    @cached_property
+    def body_variables(self) -> tuple[str, ...]:
+        res = set()
+
+        class Transformer(clingo.ast.Transformer):
+            def visit_Variable(self, node):
+                res.add(str(node))
+                return node
+
+        Transformer().visit_sequence(self.value.body)
+        return tuple(sorted(res))
+
+    @cached_property
+    def global_safe_variables(self) -> tuple[str, ...]:
+        res = set()
+
+        class Transformer(clingo.ast.Transformer):
+            def visit_Literal(self, node):
+                if node.sign == clingo.ast.Sign.NoSign:
+                    self.visit_children(node)
+
+            def visit_BodyAggregate(self, node):
+                for guard in [node.left_guard, node.right_guard]:
+                    if guard.comparison == clingo.ast.ComparisonOperator.Equal:
+                        self.visit(guard.term)
+
+            def visit_Variable(self, node):
+                res.add(str(node))
+                return node
+
+        Transformer().visit_sequence(self.value.body)
+        return tuple(sorted(res))
+
+    def with_extended_body(self, atom: SymbolicAtom, sign: clingo.ast.Sign = clingo.ast.Sign.NoSign) -> "SymbolicRule":
+        string = self.__parsed_string[:-1] if self.__parsed_string is not None else str(self)[:-1]
+        literal = f"{atom}" if sign == clingo.ast.Sign.NoSign else \
+            f"not {atom}" if sign == clingo.ast.Sign.Negation else \
+            f"not not {atom}"
+        return self.parse(f"{string}; {literal}." if len(self.value.body) > 0 else f"{string} :- {literal}.")
+
+
+
+@typeguard.typechecked
+@dataclasses.dataclass(frozen=True)
+class SymbolicProgram:
+    __rules: list[SymbolicRule]
+    __parsed_string: Optional[str]
+
+    key: InitVar[PrivateKey]
+    __key = PrivateKey()
+
+    def __post_init__(self, key: PrivateKey):
+        self.__key.validate(key)
+
+    @staticmethod
+    def parse(string: str) -> "SymbolicProgram":
+        rules = [SymbolicRule.of(rule, utils.extract_parsed_string(string, rule.location))
+                 for rule in Parser.parse_program(string)]
+        return SymbolicProgram(rules, string, key=SymbolicProgram.__key)
+
+    def __str__(self):
+        return '\n'.join(str(rule) for rule in self.__rules) if self.__parsed_string is None else self.__parsed_string
+
+    def __len__(self):
+        return len(self.__rules)
+
+    def __getitem__(self, item: int):
+        return self.__rules[item]
 
 
 @typeguard.typechecked

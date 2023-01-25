@@ -1,7 +1,8 @@
 import clingo
+import clingo.ast
 import pytest
 
-from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule
+from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule, SymbolicProgram, SymbolicAtom
 
 
 def test_parser_error():
@@ -187,3 +188,38 @@ __number(1).
 __string(\"2\").
 __string(\"3\").
     """.strip()
+
+
+def test_parse_symbolic_program():
+    string = """
+foo(X) :-
+    bar(X,Y);
+    not buzz(Y).
+b :-  a.
+    """.strip()
+    program = SymbolicProgram.parse(string)
+    assert str(program) == string
+    assert len(program) == 2
+    assert str(program[-1]) == string.split('\n')[-1]
+
+
+def test_symbolic_rule_head_variables():
+    assert SymbolicRule.parse("a(X) :- b(X,Y).").head_variables == ("X",)
+    assert SymbolicRule.parse("{a(X,Z) : c(Z)} = 1 :- b(X,Y).").head_variables == ("X", "Z")
+
+
+def test_symbolic_rule_body_variables():
+    assert SymbolicRule.parse("a(X) :- b(X,Y).").body_variables == ("X", "Y")
+    assert SymbolicRule.parse("{a(X,Z) : c(Z)} = 1 :- b(X,Y), not c(W).").body_variables == ("W", "X", "Y")
+
+
+def test_symbolic_rule_global_safe_variables():
+    assert SymbolicRule.parse("a(X) :- b(X,Y).").global_safe_variables == ("X", "Y")
+    assert SymbolicRule.parse("a(X,Y) :- b(X).").global_safe_variables == ("X",)
+    assert SymbolicRule.parse("a(X) :- b(X), not c(Y).").global_safe_variables == ("X",)
+    assert SymbolicRule.parse("a(X) :- X = #count{Y : b(Y)} = X.").global_safe_variables == ("X",)
+
+
+def test_symbolic_rule_with_extended_body():
+    assert str(SymbolicRule.parse("a.").with_extended_body(SymbolicAtom.parse("b"))) == "a :- b."
+    assert str(SymbolicRule.parse("a :- b.").with_extended_body(SymbolicAtom.parse("c"), clingo.ast.Sign.Negation)) == "a :- b; not c."
