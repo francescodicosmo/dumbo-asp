@@ -411,15 +411,17 @@ class Model:
         return on_model.res
 
     @staticmethod
-    def of_program(*args: str | Iterable[str]) -> "Model":
+    def of_program(*args: str | SymbolicProgram | Iterable[str | SymbolicProgram]) -> "Model":
         program = []
         for arg in args:
             if type(arg) is str:
                 program.append(arg)
+            elif type(arg) is SymbolicProgram:
+                program.append(str(arg))
             else:
-                program.extend(arg)
+                program.extend(str(elem) for elem in arg)
         control = clingo.Control()
-        control.add("base", [], '\n'.join(program))
+        control.add('\n'.join(program))
         control.ground([("base", [])])
         return Model.of_control(control)
 

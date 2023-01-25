@@ -227,3 +227,13 @@ def test_symbolic_rule_with_extended_body():
     assert str(SymbolicRule.parse(" a( X , Y ) . ").with_extended_body(SymbolicAtom.parse(" b( Z ) "))) == \
            "a( X , Y )  :- b( Z )."
 
+
+def test_():
+    program = SymbolicProgram.parse("a.")
+    print(Model.of_program(program))
+
+    control = clingo.Control(["--output", "intermediate"])
+    control.add(str(program))
+    control.ground([("base", [])])
+    # print(control.solve())
+    assert False
