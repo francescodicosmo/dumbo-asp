@@ -227,10 +227,10 @@ class GroundAtom:
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True)
 class SymbolicAtom:
-    value: clingo.ast.AST
+    __value: clingo.ast.AST
 
     def __post_init__(self):
-        validate("type", self.value.ast_type, equals=clingo.ast.ASTType.SymbolicAtom)
+        validate("type", self.__value.ast_type, equals=clingo.ast.ASTType.SymbolicAtom)
 
     @staticmethod
     def parse(string: str) -> "SymbolicAtom":
@@ -250,13 +250,13 @@ class SymbolicAtom:
         return SymbolicAtom(atom)
 
     def __str__(self):
-        return str(self.value)
+        return str(self.__value)
 
 
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True)
 class SymbolicRule:
-    value: clingo.ast.AST
+    __value: clingo.ast.AST
     __parsed_string: Optional[str]
 
     key: InitVar[PrivateKey]
@@ -264,7 +264,7 @@ class SymbolicRule:
 
     def __post_init__(self, key: PrivateKey):
         self.__key.validate(key)
-        validate("type", self.value.ast_type, equals=clingo.ast.ASTType.Rule)
+        validate("type", self.__value.ast_type, equals=clingo.ast.ASTType.Rule)
 
     @staticmethod
     def parse(string: str) -> "SymbolicRule":
@@ -280,10 +280,10 @@ class SymbolicRule:
         return SymbolicRule(value, parsed_string, key=SymbolicRule.__key)
 
     def __str__(self):
-        return str(self.value) if self.__parsed_string is None else self.__parsed_string
+        return str(self.__value) if self.__parsed_string is None else self.__parsed_string
 
     def transform(self, transformer: clingo.ast.Transformer) -> Any:
-        transformer(self.value)
+        transformer(self.__value)
 
     @cached_property
     def head_variables(self) -> tuple[str, ...]:
@@ -294,7 +294,7 @@ class SymbolicRule:
                 res.add(str(node))
                 return node
 
-        Transformer().visit(self.value.head)
+        Transformer().visit(self.__value.head)
         return tuple(sorted(res))
 
     @cached_property
@@ -306,7 +306,7 @@ class SymbolicRule:
                 res.add(str(node))
                 return node
 
-        Transformer().visit_sequence(self.value.body)
+        Transformer().visit_sequence(self.__value.body)
         return tuple(sorted(res))
 
     @cached_property
@@ -327,7 +327,7 @@ class SymbolicRule:
                 res.add(str(node))
                 return node
 
-        Transformer().visit_sequence(self.value.body)
+        Transformer().visit_sequence(self.__value.body)
         return tuple(sorted(res))
 
     def with_extended_body(self, atom: SymbolicAtom, sign: clingo.ast.Sign = clingo.ast.Sign.NoSign) -> "SymbolicRule":
@@ -335,8 +335,7 @@ class SymbolicRule:
         literal = f"{atom}" if sign == clingo.ast.Sign.NoSign else \
             f"not {atom}" if sign == clingo.ast.Sign.Negation else \
             f"not not {atom}"
-        return self.parse(f"{string}; {literal}." if len(self.value.body) > 0 else f"{string} :- {literal}.")
-
+        return self.parse(f"{string}; {literal}." if len(self.__value.body) > 0 else f"{string} :- {literal}.")
 
 
 @typeguard.typechecked
