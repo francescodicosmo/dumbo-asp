@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dumbo-asp"
-version = "0.0.15"
+version = "0.0.16"
 description = "Utilities for Answer Set Programming"
 authors = ["Mario Alviano <mario.alviano@gmail.com>"]
 

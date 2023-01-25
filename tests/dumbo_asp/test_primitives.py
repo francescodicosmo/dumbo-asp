@@ -2,7 +2,8 @@ import clingo
 import clingo.ast
 import pytest
 
-from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule, SymbolicProgram, SymbolicAtom
+from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule, SymbolicProgram, SymbolicAtom, \
+    SymbolicTerm
 
 
 def test_parser_error():
@@ -226,3 +227,16 @@ def test_symbolic_rule_with_extended_body():
            "a :- b; not c."
     assert str(SymbolicRule.parse(" a( X , Y ) . ").with_extended_body(SymbolicAtom.parse(" b( Z ) "))) == \
            "a( X , Y )  :- b( Z )."
+
+
+def test_symbolic_rule_body_as_string():
+    assert SymbolicRule.parse("a :- b, c.").body_as_string() == "b; c"
+
+
+def test_symbolic_rule_apply_variable_substitution():
+    assert str(SymbolicRule.parse("a(X) :- b(X,Y).").apply_variable_substitution(X=SymbolicTerm.of_int(1))) == \
+           "a(1) :- b(1,Y)."
+
+
+def test_symbolic_term_parse():
+    assert str(SymbolicTerm.parse("1")) == "1"
