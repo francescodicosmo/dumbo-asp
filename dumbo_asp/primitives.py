@@ -3,7 +3,7 @@ import functools
 import math
 from dataclasses import InitVar
 from functools import cached_property
-from typing import Callable, Optional, Iterable, Union, Any
+from typing import Callable, Optional, Iterable, Union, Any, Final
 
 import clingo
 import clingo.ast
@@ -228,14 +228,20 @@ class GroundAtom:
 @dataclasses.dataclass(frozen=True)
 class SymbolicAtom:
     __value: clingo.ast.AST
+    __parsed_string: Optional[str]
 
-    def __post_init__(self):
+    key: InitVar[PrivateKey]
+    __key = PrivateKey()
+
+    def __post_init__(self, key: PrivateKey):
+        self.__key.validate(key)
         validate("type", self.__value.ast_type, equals=clingo.ast.ASTType.SymbolicAtom)
 
     @staticmethod
     def parse(string: str) -> "SymbolicAtom":
+        rule: Final = f":- {string}."
         try:
-            program = Parser.parse_program(f":- {string}.")
+            program = Parser.parse_program(rule)
         except Parser.Error as error:
             raise error.drop(first=3, last=1)
 
@@ -247,10 +253,10 @@ class SymbolicAtom:
         validate("positive", literal.sign, equals=clingo.ast.Sign.NoSign,
                  help_msg=f"Unexpected default negation in {utils.one_line(string)}")
         atom = literal.atom
-        return SymbolicAtom(atom)
+        return SymbolicAtom(atom, utils.extract_parsed_string(rule, literal.location), key=SymbolicAtom.__key)
 
     def __str__(self):
-        return str(self.__value)
+        return self.__parsed_string or str(self.__value)
 
 
 @typeguard.typechecked
@@ -280,7 +286,7 @@ class SymbolicRule:
         return SymbolicRule(value, parsed_string, key=SymbolicRule.__key)
 
     def __str__(self):
-        return str(self.__value) if self.__parsed_string is None else self.__parsed_string
+        return self.__parsed_string or str(self.__value)
 
     def transform(self, transformer: clingo.ast.Transformer) -> Any:
         transformer(self.__value)

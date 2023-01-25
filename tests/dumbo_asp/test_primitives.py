@@ -222,4 +222,8 @@ def test_symbolic_rule_global_safe_variables():
 
 def test_symbolic_rule_with_extended_body():
     assert str(SymbolicRule.parse("a.").with_extended_body(SymbolicAtom.parse("b"))) == "a :- b."
-    assert str(SymbolicRule.parse("a :- b.").with_extended_body(SymbolicAtom.parse("c"), clingo.ast.Sign.Negation)) == "a :- b; not c."
+    assert str(SymbolicRule.parse("a :- b.").with_extended_body(SymbolicAtom.parse("c"), clingo.ast.Sign.Negation)) == \
+           "a :- b; not c."
+    assert str(SymbolicRule.parse(" a( X , Y ) . ").with_extended_body(SymbolicAtom.parse(" b( Z ) "))) == \
+           "a( X , Y )  :- b( Z )."
+
