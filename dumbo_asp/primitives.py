@@ -449,13 +449,20 @@ class SymbolicProgram:
     def __getitem__(self, item: int):
         return self.__rules[item]
 
+    @cached_property
+    def herbrand_base(self) -> "Model":
+        control = clingo.Control()
+        control.add(str(self))
+        control.ground([("base", [])])
+        return Model.of_atoms(atom.symbol for atom in control.symbolic_atoms)
+
 
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True, order=True)
 class Model:
-    key: InitVar[PrivateKey]
     value: tuple[GroundAtom | int | str, ...]
 
+    key: InitVar[PrivateKey]
     __key = PrivateKey()
 
     class NoModelError(ValueError):

@@ -240,3 +240,7 @@ def test_symbolic_rule_apply_variable_substitution():
 
 def test_symbolic_term_parse():
     assert str(SymbolicTerm.parse("1")) == "1"
+
+
+def test_program_herbrand_base():
+    assert SymbolicProgram.parse("a(X) :- X = 1..3.").herbrand_base == Model.of_program("a(1..3).")

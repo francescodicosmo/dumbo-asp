@@ -55,3 +55,38 @@ def compute_minimal_unsatisfiable_subsets(
             }))
         res.append(SymbolicProgram.of(rules))
     return res
+
+
+@typeguard.typechecked
+def explain_by_minimal_unsatisfiable_subsets(
+        program: SymbolicProgram,
+        answer_set: Model,
+        atom: GroundAtom,
+        up_to: PositiveIntegerOrUnbounded = PositiveIntegerOrUnbounded.of(1),
+        *,
+        over_the_ground_program: bool = False,
+        clingo: Path = Path("clingo"),
+        wasp: Path = Path("wasp"),
+) -> list[SymbolicProgram]:
+    rules = [rule for rule in program]
+    true_atoms = {atom for atom in answer_set}
+    for base_atom in program.herbrand_base:
+        if base_atom == atom:
+            if base_atom in true_atoms:
+                rule = f":- %* truth of {atom} is implied by the above rules and... *%  {atom}."
+            else:
+                rule = f":- %* falsity of {atom} is implied by the above rules and... *%  not {atom}."
+        else:
+            if base_atom in true_atoms:
+                rule = f":- %* by {base_atom} in the answer set *% not  {base_atom}."
+            else:
+                rule = f":- %* by not {base_atom} in the answer set *%  {base_atom}."
+        rules.append(SymbolicRule.parse(rule))
+    extended_program = SymbolicProgram.of(rules)
+    return compute_minimal_unsatisfiable_subsets(
+        extended_program,
+        up_to,
+        over_the_ground_program=over_the_ground_program,
+        clingo=clingo,
+        wasp=wasp,
+    )
