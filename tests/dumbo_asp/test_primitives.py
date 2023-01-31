@@ -242,5 +242,54 @@ def test_symbolic_term_parse():
     assert str(SymbolicTerm.parse("1")) == "1"
 
 
+def test_program_herbrand_universe():
+    assert SymbolicProgram.parse("a(X) :- X = 1..3.").herbrand_universe == {SymbolicTerm.of_int(x) for x in range(1, 4)}
+    assert SymbolicProgram.parse("a(X,Y) :- X = 1..3, Y = 4..5.").herbrand_universe == \
+           {SymbolicTerm.of_int(x) for x in range(1, 6)}
+    assert SymbolicProgram.parse("a(b(c)).").herbrand_universe == {SymbolicTerm.parse("c")}
+
+
 def test_program_herbrand_base():
     assert SymbolicProgram.parse("a(X) :- X = 1..3.").herbrand_base == Model.of_program("a(1..3).")
+
+
+def test_symbolic_rule_is_fact():
+    assert SymbolicRule.parse("a.").is_fact
+    assert SymbolicRule.parse("a(1).").is_fact
+    assert SymbolicRule.parse("a(x).").is_fact
+    assert SymbolicRule.parse("a(X).").is_fact
+    assert not SymbolicRule.parse("a | b.").is_fact
+
+
+def test_symbolic_program_process_constants():
+    assert str(SymbolicProgram.parse("""
+__const__(x, 10).
+a(x).
+    """.strip()).process_constants()) == """%* __const__(x, 10). *%\na(10)."""
+
+
+def test_symbolic_program_process_with_statements():
+    assert str(SymbolicProgram.parse("""
+__with__(foo(X)).
+    a(X).
+    b(X,Y) :- c(Y).
+__end_with__.
+    """.strip()).process_with_statements()) == """
+%* __with__(foo(X)). *%
+a(X) :- foo(X).
+b(X,Y) :- c(Y); foo(X).
+%* __end_with__. *%
+""".strip()
+
+
+def test_():
+    assert Model.of_program(SymbolicProgram.parse("""
+a(b(0),1).
+__show__(
+    a(
+        X,
+        Y
+    ), 
+    a(X,Y)
+).
+    """).process_constants()) == Model.of_atoms("a(10)")

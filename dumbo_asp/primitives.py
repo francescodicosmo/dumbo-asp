@@ -3,13 +3,12 @@ import dataclasses
 import functools
 import math
 from dataclasses import InitVar
-from functools import cached_property
+from functools import cached_property, cache
 from typing import Callable, Optional, Iterable, Union, Any, Final
 
 import clingo
 import clingo.ast
 import typeguard
-from dumbo_asp.utils import extract_parsed_string
 from dumbo_utils.primitives import PrivateKey
 from dumbo_utils.validation import validate, ValidationError
 
@@ -109,9 +108,10 @@ class Parser:
 class Predicate:
     name: str
     arity: Optional[int]
-    key: InitVar[PrivateKey]
 
+    key: InitVar[PrivateKey]
     __key = PrivateKey()
+
     MAX_ARITY = 999
 
     def __post_init__(self, key: PrivateKey):
@@ -237,7 +237,9 @@ class SymbolicTerm:
 
     def __post_init__(self, key: PrivateKey):
         self.__key.validate(key)
-        validate("type", self.__value.ast_type, equals=clingo.ast.ASTType.SymbolicTerm)
+        validate("type", self.__value.ast_type, is_in=[
+            clingo.ast.ASTType.SymbolicTerm, clingo.ast.ASTType.Function,
+        ])
 
     @staticmethod
     def parse(string: str) -> "SymbolicTerm":
@@ -268,6 +270,9 @@ class SymbolicTerm:
     def __str__(self):
         return self.__parsed_string or str(self.__value)
 
+    def int_value(self) -> int:
+        return self.__value.symbol.number
+
     def make_copy_of_value(self) -> clingo.ast.AST:
         return copy.deepcopy(self.__value)
 
@@ -284,7 +289,8 @@ class SymbolicAtom:
     def __post_init__(self, key: PrivateKey):
         self.__key.validate(key)
         validate("type", self.__value.ast_type,
-                 is_in=[clingo.ast.ASTType.SymbolicAtom, clingo.ast.ASTType.BooleanConstant])
+                 is_in=[clingo.ast.ASTType.SymbolicAtom, clingo.ast.ASTType.Function,
+                        clingo.ast.ASTType.BooleanConstant])
 
     @staticmethod
     def of_false() -> "SymbolicAtom":
@@ -308,11 +314,35 @@ class SymbolicAtom:
         atom = literal.atom
         return SymbolicAtom(atom, utils.extract_parsed_string(rule, literal.location), key=SymbolicAtom.__key)
 
+    @staticmethod
+    def of(value: clingo.ast.AST) -> "SymbolicAtom":
+        return SymbolicAtom(value, None, key=SymbolicAtom.__key)
+
     def __str__(self):
         return self.__parsed_string or str(self.__value)
 
     def make_copy_of_value(self) -> clingo.ast.AST:
         return copy.deepcopy(self.__value)
+
+    @cached_property
+    def predicate(self) -> Predicate:
+        return Predicate.parse(self.__value.name, len(self.__value.arguments))
+
+    @property
+    def predicate_name(self) -> str:
+        return self.predicate.name
+
+    @property
+    def predicate_arity(self) -> int:
+        return self.predicate.arity
+
+    @cached_property
+    def arguments(self) -> tuple[SymbolicTerm, ...]:
+        return tuple(SymbolicTerm.parse(str(argument)) for argument in self.__value.arguments)
+
+    @property
+    def strongly_negated(self) -> bool:
+        return self.value.negative
 
 
 @typeguard.typechecked
@@ -320,6 +350,7 @@ class SymbolicAtom:
 class SymbolicRule:
     __value: clingo.ast.AST
     __parsed_string: Optional[str]
+    disabled: bool
 
     key: InitVar[PrivateKey]
     __key = PrivateKey()
@@ -329,23 +360,37 @@ class SymbolicRule:
         validate("type", self.__value.ast_type, equals=clingo.ast.ASTType.Rule)
 
     @staticmethod
-    def parse(string: str) -> "SymbolicRule":
+    def parse(string: str, disabled: bool = False) -> "SymbolicRule":
         program = Parser.parse_program(string)
         validate("one rule", program, length=1,
                  help_msg=f"Unexpected sequence of {len(program)} rules in {utils.one_line(string)}")
-        return SymbolicRule(program[0], utils.extract_parsed_string(string, program[0].location),
+        return SymbolicRule(program[0], utils.extract_parsed_string(string, program[0].location), disabled=disabled,
                             key=SymbolicRule.__key)
 
     @staticmethod
-    def of(value: clingo.ast.AST) -> "SymbolicRule":
+    def of(value: clingo.ast.AST, disabled: bool = False) -> "SymbolicRule":
         validate("value", value.ast_type == clingo.ast.ASTType.Rule, equals=True)
-        return SymbolicRule(value, None, key=SymbolicRule.__key)
+        return SymbolicRule(value, None, disabled=disabled, key=SymbolicRule.__key)
 
     def __str__(self):
-        return self.__parsed_string or str(self.__value)
+        res = self.__parsed_string or str(self.__value)
+        return f"%* {res} *%" if self.disabled else res
 
     def transform(self, transformer: clingo.ast.Transformer) -> Any:
         transformer(self.__value)
+
+    @property
+    def is_fact(self) -> bool:
+        return len(self.__value.body) == 0 and self.is_normal_rule
+
+    @property
+    def is_normal_rule(self) -> bool:
+        return self.__value.head.ast_type == clingo.ast.ASTType.Literal and \
+            self.__value.head.sign == clingo.ast.Sign.NoSign
+
+    @property
+    def head_atom(self) -> SymbolicAtom:
+        return SymbolicAtom.of(self.__value.head.atom.symbol)
 
     @cached_property
     def head_variables(self) -> tuple[str, ...]:
@@ -382,22 +427,27 @@ class SymbolicRule:
 
             def visit_BodyAggregate(self, node):
                 for guard in [node.left_guard, node.right_guard]:
-                    if guard.comparison == clingo.ast.ComparisonOperator.Equal:
+                    if guard is not None and guard.comparison == clingo.ast.ComparisonOperator.Equal:
                         self.visit(guard.term)
 
             def visit_Variable(self, node):
-                res.add(str(node))
+                if node.name != '_':
+                    res.add(node.name)
                 return node
 
         Transformer().visit_sequence(self.__value.body)
         return tuple(sorted(res))
+
+    def disable(self) -> "SymbolicRule":
+        return SymbolicRule(self.__value, self.__parsed_string, True, key=self.__key)
 
     def with_extended_body(self, atom: SymbolicAtom, sign: clingo.ast.Sign = clingo.ast.Sign.NoSign) -> "SymbolicRule":
         string = self.__parsed_string[:-1] if self.__parsed_string is not None else str(self)[:-1]
         literal = f"{atom}" if sign == clingo.ast.Sign.NoSign else \
             f"not {atom}" if sign == clingo.ast.Sign.Negation else \
             f"not not {atom}"
-        return self.parse(f"{string}; {literal}." if len(self.__value.body) > 0 else f"{string} :- {literal}.")
+        return self.parse(f"{string}; {literal}." if len(self.__value.body) > 0 else f"{string} :- {literal}.",
+                          self.disabled)
 
     def body_as_string(self, separator: str = "; ") -> str:
         return separator.join(str(x) for x in self.__value.body)
@@ -409,7 +459,16 @@ class SymbolicRule:
                     return node
                 return kwargs[str(node)].make_copy_of_value()
 
-        return self.of(Transformer().visit(self.__value))
+        return self.of(Transformer().visit(self.__value), self.disabled)
+
+    def apply_term_substitution(self, **kwargs: SymbolicTerm) -> "SymbolicRule":
+        class Transformer(clingo.ast.Transformer):
+            def visit_SymbolicTerm(self, node):
+                if str(node) not in kwargs.keys():
+                    return node
+                return kwargs[str(node)].make_copy_of_value()
+
+        return self.of(Transformer().visit(self.__value), self.disabled)
 
 
 @typeguard.typechecked
@@ -450,11 +509,69 @@ class SymbolicProgram:
         return self.__rules[item]
 
     @cached_property
+    def herbrand_universe(self) -> set[SymbolicTerm]:
+        res = set()
+
+        def get_arguments(term):
+            for argument in term.arguments:
+                if argument.type == clingo.SymbolType.Function and argument.arguments:
+                    get_arguments(argument)
+                else:
+                    res.add(SymbolicTerm.parse(str(argument)))
+
+        for atom in self.herbrand_base:
+            get_arguments(atom)
+        return res
+
+    @cached_property
     def herbrand_base(self) -> "Model":
         control = clingo.Control()
         control.add(str(self))
         control.ground([("base", [])])
         return Model.of_atoms(atom.symbol for atom in control.symbolic_atoms)
+
+    @cache
+    def process_constants(self) -> "SymbolicProgram":
+        rules = []
+        constants = {}
+        for rule in self:
+            if rule.is_fact:
+                head_atom = rule.head_atom
+                if head_atom.predicate_name == "__const__":
+                    validate("arity", head_atom.predicate_arity, equals=2, help_msg="Error in defining constant")
+                    name, value = head_atom.arguments
+                    constants[str(name)] = value
+                    rules.append(rule.disable())
+                    continue
+            rules.append(rule.apply_term_substitution(**constants))
+
+        return SymbolicProgram.of(rules)
+
+    @cache
+    def process_with_statements(self) -> "SymbolicProgram":
+        rules = []
+        statements_queue = []
+        for rule in self:
+            if rule.is_fact:
+                head_atom = rule.head_atom
+                if head_atom.predicate_name == "__with__":
+                    statements_queue.append(tuple(SymbolicAtom.parse(str(argument))
+                                                  for argument in head_atom.arguments))
+                    rules.append(rule.disable())
+                    continue
+                if head_atom.predicate_name == "__end_with__":
+                    validate("no arguments", head_atom.arguments, length=0)
+                    statements_queue.pop()
+                    rules.append(rule.disable())
+                    continue
+            for statement in statements_queue:
+                for literal in statement:
+                    rule = rule.with_extended_body(literal)
+            rules.append(rule)
+        validate("all __with__ are terminated", statements_queue, length=0,
+                 help_msg=f"{len(statements_queue)} unterminated __with__ statements")
+
+        return SymbolicProgram.of(rules)
 
 
 @typeguard.typechecked

@@ -1,12 +1,12 @@
 import subprocess
-import uuid
 from pathlib import Path
-from typing import Any, Optional, Final
+from typing import Final
 
 import typeguard
-from dumbo_asp.primitives import SymbolicProgram, GroundAtom, Model, SymbolicAtom, SymbolicRule, SymbolicTerm
 from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 from dumbo_utils.validation import validate
+
+from dumbo_asp.primitives import SymbolicProgram, Model, SymbolicAtom, SymbolicRule, SymbolicTerm
 
 
 @typeguard.typechecked
@@ -18,13 +18,16 @@ def compute_minimal_unsatisfiable_subsets(
         clingo: Path = Path("clingo"),
         wasp: Path = Path("wasp"),
 ) -> list[SymbolicProgram]:
-    predicate: Final = f"__mus_{str(uuid.uuid4()).replace('-', '_')}__"
+    predicate: Final = f"__mus__"
     if over_the_ground_program:
-        rules = []
+        rules = [
+            SymbolicRule.parse(f"__constant{predicate}({';'.join(str(term) for term in program.herbrand_universe)}).")
+        ]
         for index, rule in enumerate(program, start=1):
             terms = ','.join([str(index), *rule.global_safe_variables])
             rules.append(rule.with_extended_body(SymbolicAtom.parse(f"{predicate}({terms})")))
-            rules.append(SymbolicRule.parse(f"{{{predicate}({terms})}} :- {rule.body_as_string()}."))
+            variables = '; '.join(f"__constant{predicate}({variable})" for variable in rule.global_safe_variables)
+            rules.append(SymbolicRule.parse(f"{{{predicate}({terms})}} :- {variables}."))
         mus_program = SymbolicProgram.of(rules)
     else:
         mus_program = SymbolicProgram.of(
@@ -34,8 +37,9 @@ def compute_minimal_unsatisfiable_subsets(
                 f"{{{predicate}(1..{len(program)})}}."
             ),
         )
+    # print(mus_program)
     res = subprocess.run(
-        ["bash", "-c", f"clingo --output=smodels | wasp --silent --mus={predicate} -n {up_to if up_to.is_int else 0}"],
+        ["bash", "-c", f"{clingo} --output=smodels | {wasp} --silent --mus={predicate} -n {up_to if up_to.is_int else 0}"],
         input=str(mus_program).encode(),
         capture_output=True,
     )
@@ -55,38 +59,3 @@ def compute_minimal_unsatisfiable_subsets(
             }))
         res.append(SymbolicProgram.of(rules))
     return res
-
-
-@typeguard.typechecked
-def explain_by_minimal_unsatisfiable_subsets(
-        program: SymbolicProgram,
-        answer_set: Model,
-        atom: GroundAtom,
-        up_to: PositiveIntegerOrUnbounded = PositiveIntegerOrUnbounded.of(1),
-        *,
-        over_the_ground_program: bool = False,
-        clingo: Path = Path("clingo"),
-        wasp: Path = Path("wasp"),
-) -> list[SymbolicProgram]:
-    rules = [rule for rule in program]
-    true_atoms = {atom for atom in answer_set}
-    for base_atom in program.herbrand_base:
-        if base_atom == atom:
-            if base_atom in true_atoms:
-                rule = f":- %* truth of {atom} is implied by the above rules and... *%  {atom}."
-            else:
-                rule = f":- %* falsity of {atom} is implied by the above rules and... *%  not {atom}."
-        else:
-            if base_atom in true_atoms:
-                rule = f":- %* by {base_atom} in the answer set *% not  {base_atom}."
-            else:
-                rule = f":- %* by not {base_atom} in the answer set *%  {base_atom}."
-        rules.append(SymbolicRule.parse(rule))
-    extended_program = SymbolicProgram.of(rules)
-    return compute_minimal_unsatisfiable_subsets(
-        extended_program,
-        up_to,
-        over_the_ground_program=over_the_ground_program,
-        clingo=clingo,
-        wasp=wasp,
-    )

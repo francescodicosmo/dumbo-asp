@@ -129,3 +129,6 @@ dmypy.json
 .pyre/
 
 .idea
+
+ignore_*.py
+test_ignore_*.py
