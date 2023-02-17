@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dumbo-asp"
-version = "0.0.19"
+version = "0.0.20"
 description = "Utilities for Answer Set Programming"
 authors = ["Mario Alviano <mario.alviano@gmail.com>"]
 
@@ -10,8 +10,12 @@ dateutils = "^0.6.12"
 igraph = "^0.10.2"
 cairocffi = "^1.4.0"
 Pillow = "^9.3.0"
-dumbo-utils = "^0.1.6"
+dumbo-utils = "^0.1.8"
 clingo = "^5.6.2"
+typeguard = "^2.13.3"
+rich = "^13.3.1"
+update = "^0.0.1"
+valid8 = "^5.1.2"
 
 [tool.poetry.dev-dependencies]
 coverage = "^7.0.4"
