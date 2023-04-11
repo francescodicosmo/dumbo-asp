@@ -2,9 +2,15 @@ import copy
 import dataclasses
 import functools
 import math
+import uuid
+from collections import OrderedDict
+import pathlib
+import sys
+
 from dataclasses import InitVar
 from functools import cached_property, cache
 from typing import Callable, Optional, Iterable, Union, Any, Final
+from typing import Sequence
 
 import clingo
 import clingo.ast
@@ -14,6 +20,9 @@ from dumbo_utils.validation import validate, ValidationError
 
 from dumbo_asp import utils
 
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
 
 @typeguard.typechecked
 class Parser:
@@ -595,26 +604,27 @@ class Model:
         return Model(key=Model.__key, value=())
 
     @staticmethod
-    def of_control(control: clingo.Control) -> "Model":
+    def of_control(control: clingo.Control) -> "list[Model]":
         def on_model(model):
-            if on_model.cost is not None and on_model.cost <= model.cost:
-                on_model.exception = True
-            on_model.cost = model.cost
-            on_model.res = Model.of_elements(model.symbols(shown=True))
-        on_model.cost = None
-        on_model.res = None
+#            if on_model.cost is not None and on_model.cost <= model.cost:
+#                on_model.exception = True
+            on_model.cost.append(model.cost)
+            on_model.res.append(Model.of_elements(model.symbols(shown=True)))
+        on_model.cost = []
+        on_model.res = []
         on_model.exception = False
 
         control.solve(on_model=on_model)
-        if on_model.res is None:
+        if not on_model.res: # the list is empty
             raise Model.NoModelError
         if on_model.exception:
             raise Model.MultipleModelsError
         return on_model.res
 
     @staticmethod
-    def of_program(*args: str | SymbolicProgram | Iterable[str | SymbolicProgram]) -> "Model":
+    def of_program(*args: str | SymbolicProgram | Iterable[str | SymbolicProgram], arguments: Sequence[str] = []) -> "list[Model]":
         program = []
+
         for arg in args:
             if type(arg) is str:
                 program.append(arg)
@@ -622,7 +632,8 @@ class Model:
                 program.append(str(arg))
             else:
                 program.extend(str(elem) for elem in arg)
-        control = clingo.Control()
+#        control = clingo.Control()
+        control = clingo.Control(arguments=arguments)
         control.add('\n'.join(program))
         control.ground([("base", [])])
         return Model.of_control(control)
@@ -751,3 +762,262 @@ class Model:
     @property
     def block_up(self) -> str:
         return ":- " + ", ".join([f"{atom}" for atom in self]) + '.'
+
+
+def uuid_string():
+    return str(uuid.uuid4()).replace('-', '_')
+
+class PredicateRenamer(clingo.ast.Transformer):
+    def __init__(self, static_id, internal_id, mapping_relation: tuple = None) -> None:
+        super().__init__()
+        self.__static_id = static_id
+        self.__id = internal_id
+#        self.__input_relation = ("","")
+#        self.__output_relation = ("","")
+        # The dictionary of all mapping_relation defined by the user
+        self.__mappings = {}
+
+
+        if mapping_relation is not None:
+#            if len(mapping_relation) > 2:
+#                raise ValueError("The input tuple must contain only two tuples")
+
+            for relation in mapping_relation:
+                if not isinstance(relation, tuple) or not isinstance(relation, tuple):
+                    raise ValueError("Mapping relation must be a tuple")
+                self.__mappings[relation[0]] = relation[1]
+
+#            self.__input_relation = mapping_relation[0]
+#            self.__output_relation = mapping_relation[1]
+
+    def apply(self, string):
+        res = []
+
+        def callback(obj):
+            line = str(self.__call__(obj))
+            if line == "#show /0.":
+                line = "#show."
+            elif line == "#program base.":
+                return
+            res.append(line)
+
+#        print(string)
+        clingo.ast.parse_string(string, callback)
+        return '\n'.join(res)
+
+    def visit_Function(self, node):
+        # if node.name == self.__input_relation[0]:
+        #    node = node.update(name=f'{self.__input_relation[1]}')
+        # elif node.name==self.__output_relation[0]:
+        #    node = node.update(name=f'{self.__output_relation[1]}')
+        # print(self.__mappings[node.name])
+        if self.__mappings.get(node.name) is not None:
+            node = node.update(name=f'{self.__mappings[node.name]}')
+
+        if node.name.startswith("__static_"):
+            return node.update(name=f'{node.name}___{self.__static_id}')
+        elif node.name.startswith("__") and not node.name.startswith("___"):
+            return node.update(name=f'{node.name}___{self.__id}')
+        return node
+
+import ast
+class ModuleMapper(clingo.ast.Transformer):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.resulting_modules = {}
+        self.current_module_name = "main"
+        self.modules_to_apply = []
+
+        # Track modules which have been correctly closed
+        self.closed_modules = {}
+
+
+    def apply(self, string):
+        def callback(obj):
+            line = str(self.__call__(obj))
+            if line == "#show /0.":
+                line = "#show."
+            elif line == "#program base.":
+                return
+
+            if self.resulting_modules.get(self.current_module_name) is None:
+                self.resulting_modules[self.current_module_name] = []
+
+            if line is not None and line != "":
+                self.resulting_modules[self.current_module_name].append(line)
+
+        clingo.ast.parse_string(str(string), callback)
+
+        # for each key zip the array in a string and create the Module object
+        for key in self.resulting_modules:
+            self.resulting_modules[key] = "\n".join(self.resulting_modules[key])
+
+        return self.resulting_modules, self.modules_to_apply
+
+    def visit_Rule(self, node):
+        node_str = str(node)
+        if node_str.startswith("__module__"):
+            #print(str(node.head.atom.symbol.arguments[0]).replace("\"", ""))
+            if len(node.head.atom.symbol.arguments) != 1:
+                raise ValueError("Module must have only a name")
+
+            if self.current_module_name != "main" and not self.closed_modules[self.current_module_name]:
+                eprint(f"Warning: module \"{self.current_module_name}\" not closed")
+
+            self.current_module_name = str(node.head.atom.symbol.arguments[0]).replace("\"", "")
+            self.closed_modules[self.current_module_name] = False
+
+            return ""
+
+        if node_str.startswith("__end__"):
+            self.current_module_name = "main"
+            self.closed_modules[self.current_module_name] = True
+            return ""
+
+        if node_str.startswith("__apply_module__"):
+            if self.current_module_name != "main" and not self.closed_modules[self.current_module_name]:
+                eprint(f"Warning: module \"{self.current_module_name}\" not closed")
+            mappings = None
+            if len(node.head.atom.symbol.arguments) > 1:
+                mappings = ast.literal_eval(str(node.head.atom.symbol.arguments[1]))
+            self.modules_to_apply.append((str(node.head.atom.symbol.arguments[0]).replace("\"", ""), mappings))
+
+            self.current_module_name = "main"
+            return ""
+        return node
+
+
+class Module:
+    def __init__(self, name: str, program: str | SymbolicProgram):
+        self.name = name
+        self.__static_uuid = uuid_string()
+
+        if type(program) is SymbolicProgram:
+            program = str(program)
+
+        self._program = program
+
+    def __str__(self):
+        return f"__module__(\"{self.name}\").\n{self._program}\n__end__."
+
+    def __repr__(self):
+        return f"Module(name={self.name}, program={self._program})"
+
+    def is_empty_program(self) -> bool:
+        return self._program == ""
+
+    def rewrite(self, mapping_relation: tuple = None) -> str:
+        transformer = PredicateRenamer(self.__static_uuid, uuid_string(), mapping_relation=mapping_relation)
+        return transformer.apply(self._program)
+
+
+
+
+@typeguard.typechecked
+@dataclasses.dataclass(frozen=True)
+class Program(Module):
+
+    # the dictionary of submodules added to the class program
+    # key: module name
+    # value: (module obj, boolean: isApplied)
+    submodules = OrderedDict()
+    # the final (full) program - set of all subprograms
+    __end_program = ""
+
+    class NoModuleNameError(ValueError):
+        def __init__(self, *args):
+            super().__init__("no module name error", *args)
+
+    @staticmethod
+    def load(file: str | pathlib.Path) -> None:
+        parsed_file = None
+
+        if isinstance(file, pathlib.Path):
+            with open(file, "r") as f:
+                parsed_file = SymbolicProgram.parse(f.read())
+        elif type(file) is str:
+            parsed_file = SymbolicProgram.parse(file)
+        else:
+            raise TypeError("file must be a string or a pathlib.Path instance")
+
+        transformer = ModuleMapper()
+        new_modules, to_apply = transformer.apply(str(parsed_file))
+
+        for module in new_modules:
+            Program.add_module(new_modules[module], name=module)
+
+        for apply in to_apply:
+            Program.apply_module(apply[0], mapping_relation=apply[1])
+
+
+
+    @staticmethod
+    def add_module(arg: str | SymbolicProgram, name: str = "main") -> None:
+
+        if type(arg) is str:
+            arg = SymbolicProgram.parse(arg)
+
+        if Program.submodules.get(name) is not None:
+            if str(arg) == "":
+                return
+            eprint(f"Warning: module \"{name}\" already exists. Overwriting...")
+
+        # By default, the module is not applied (False)
+        Program.submodules[name] = (Module(name, arg), False)
+
+
+    @staticmethod
+    def apply_module(module_name: str, mapping_relation: tuple = None) -> str:
+        if module_name not in Program.submodules:
+            raise Program.NoModuleNameError(mapping_relation)
+
+        rewritten_program = Program.submodules[module_name][0].rewrite(mapping_relation)
+
+        ##### Update the tuple of the module (set applied = True) ####
+        Program.submodules[module_name] = (Program.submodules[module_name][0], True)
+        ######################### End update #########################
+
+        Program.__end_program += rewritten_program + "\n"
+        return rewritten_program
+
+    @staticmethod
+    def full_program() -> str:
+        return Program.__end_program
+
+    @staticmethod
+    def solve(arguments: Sequence[str] = []) -> list[Model]:
+        return Model.of_program(Program.__end_program, arguments=arguments)
+
+        # It applies all the modules that have not been applied yet without remapping (by default)
+#        if module_name is None:
+#            for module in Program.submodules.values():
+#                if not module[1]:
+#                    Program.apply_module(module[0].name)
+#            return Model.of_program(Program.__end_program, arguments=arguments)
+
+#        if module_name not in Program.submodules:
+#            raise Program.NoModuleNameError()
+
+#        return Model.of_program(Program.submodules[module_name][0].rewrite(), arguments=arguments)
+
+
+
+## DA FARE:
+        """
+        - Aggiungere il transformers per cambiare le variabili come esempio clingo modificando parse program
+            >>> from clingo.ast import Transformer, Variable, parse_string
+            >>>
+            >>> class VariableRenamer(Transformer):
+            ...     def visit_Variable(self, node):
+            ...         return node.update(name='_' + node.name)
+            ...
+            >>> vrt = VariableRenamer()
+            >>> parse_string('p(X) :- q(X).', lambda stm: print(str(vrt(stm))))
+            #program base.
+            p(_X) :- q(_X).
+        - Dare la possibilità di definire predicati di input e di output
+        - Estendere Module in Program che deve ridefinire instantiate per creare il
+          - modulo "main" entrypoint
+        - Aggiungere metodo load in program per caricare un programma 
+        """
