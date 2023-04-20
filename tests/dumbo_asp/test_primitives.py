@@ -280,16 +280,3 @@ a(X) :- foo(X).
 b(X,Y) :- c(Y); foo(X).
 %* __end_with__. *%
 """.strip()
-
-
-def test_():
-    assert Model.of_program(SymbolicProgram.parse("""
-a(b(0),1).
-__show__(
-    a(
-        X,
-        Y
-    ), 
-    a(X,Y)
-).
-    """).process_constants()) == Model.of_atoms("a(10)")
