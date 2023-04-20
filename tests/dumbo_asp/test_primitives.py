@@ -280,3 +280,109 @@ a(X) :- foo(X).
 b(X,Y) :- c(Y); foo(X).
 %* __end_with__. *%
 """.strip()
+
+
+def test_expand_one_global_variable():
+    rule = SymbolicRule.parse("""
+block((row, Row), (Row, Col)) :- Row = 1..9, Col = 1..9.
+    """.strip())
+    program = SymbolicProgram.of(rule)
+    rules = rule.expand_global_safe_variables(variables=["Row"], herbrand_base=program.herbrand_base)
+    assert len(rules) == 9
+
+
+def test_expand_all_global_variables():
+    rule = SymbolicRule.parse("""
+block((row, Row), (Row, Col)) :- Row = 1..9, Col = 1..9.
+    """.strip())
+    program = SymbolicProgram.of(rule)
+    rules = rule.expand_global_safe_variables(variables=rule.global_safe_variables, herbrand_base=program.herbrand_base)
+    assert len(rules) == 9 * 9
+
+
+def test_expand_non_global_variable():
+    rule = SymbolicRule.parse("""
+block((row, Row), (Row, Col)) :- Row = 1..9, Col = 1..9.
+        """.strip())
+    program = SymbolicProgram.of(rule)
+    with pytest.raises(ValueError):
+        rule.expand_global_safe_variables(variables=["X"], herbrand_base=program.herbrand_base)
+
+
+def test_expand_global_variables_may_need_extra_variables():
+    rule = SymbolicRule.parse("""
+block((sub, Row', Col'), (Row, Col)) :- Row = 1..9; Col = 1..9; Row' = (Row-1) / 3; Col' = (Col-1) / 3.
+    """.strip())
+    program = SymbolicProgram.of(rule)
+    rules = rule.expand_global_safe_variables(variables=["Row'", "Col'"], herbrand_base=program.herbrand_base)
+    assert len(rules) == 9
+
+
+def test_expand_global_variables_in_program():
+    program = SymbolicProgram.parse("""
+block((row, Row), (Row, Col)) :- Row = 1..9, Col = 1..9.
+block((col, Col), (Row, Col)) :- Row = 1..9, Col = 1..9.
+    """.strip())
+    program = program.expand_global_safe_variables(rule=program[0], variables=["Row"])
+    assert len(program) == 9 + 1
+    program = program.expand_global_safe_variables(rule=program[-1], variables=["Col"])
+    assert len(program) == 9 + 9
+
+
+def test_symbolic_term_int():
+    term = SymbolicTerm.parse("123")
+    assert term.is_int()
+    assert term.int_value() == 123
+
+
+def test_symbolic_term_string():
+    term = SymbolicTerm.parse('"foo"')
+    assert term.is_string()
+    assert str(term) == '"foo"'
+
+
+def test_symbolic_term_function():
+    term = SymbolicTerm.parse("foo(bar)")
+    assert term.is_function()
+    assert term.function_name == "foo"
+    assert term.function_arity == 1
+
+
+def test_symbolic_atom_match():
+    atom1 = SymbolicAtom.parse("foo(bar)")
+    atom2 = SymbolicAtom.parse("foo(X)")
+    assert atom1.match(atom2)
+
+
+def test_symbolic_atom_match_nested():
+    atom1 = SymbolicAtom.parse("foo(bar(buzz))")
+    atom2 = SymbolicAtom.parse("foo(bar(X))")
+    assert atom1.match(atom2)
+
+
+def test_program_move_up():
+    program = SymbolicProgram.parse("""
+given((1, 1), 6).
+given((1, 3), 9).    
+given((2, 9), 1).
+given((7, 3), 4).
+given((7, 4), 7).
+given((8, 9), 8).
+given((9, 7), 7).
+given((9, 8), 1).
+    """)
+    program = program.move_up(SymbolicAtom.parse("""
+given((7, Col), Value)
+    """))
+    assert program[0] == SymbolicRule.parse("given((7, 3), 4).")
+
+
+def test_query_herbrand_base():
+    program = SymbolicProgram.parse("""
+block((sub, Row', Col'), (Row, Col)) :- Row = 1..9; Col = 1..9; Row' = (Row-1) / 3; Col' = (Col-1) / 3.
+    """)
+    res = program.query_herbrand_base(
+        "Row, Col",
+        "block((sub, Row', Col'), (Row, Col)), block((sub, Row', Col'), (7, 9))"
+    )
+    assert len(res) == 9

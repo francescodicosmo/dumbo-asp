@@ -13,6 +13,7 @@ from dumbo_utils.primitives import PrivateKey
 from dumbo_utils.validation import validate, ValidationError
 
 from dumbo_asp import utils
+from dumbo_asp.utils import uuid
 
 
 @typeguard.typechecked
@@ -238,7 +239,7 @@ class SymbolicTerm:
     def __post_init__(self, key: PrivateKey):
         self.__key.validate(key)
         validate("type", self.__value.ast_type, is_in=[
-            clingo.ast.ASTType.SymbolicTerm, clingo.ast.ASTType.Function,
+            clingo.ast.ASTType.SymbolicTerm, clingo.ast.ASTType.Function, clingo.ast.ASTType.Variable
         ])
 
     @staticmethod
@@ -270,11 +271,44 @@ class SymbolicTerm:
     def __str__(self):
         return self.__parsed_string or str(self.__value)
 
+    def is_int(self) -> bool:
+        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and self.__value.symbol.number is not None
+
+    def is_string(self) -> bool:
+        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and self.__value.symbol.string is not None
+
+    def is_function(self) -> bool:
+        return self.__value.ast_type == clingo.ast.ASTType.Function
+
+    def is_variable(self) -> bool:
+        return self.__value.ast_type == clingo.ast.ASTType.Variable
+
     def int_value(self) -> int:
         return self.__value.symbol.number
 
+    @property
+    def function_name(self) -> str:
+        return self.__value.name
+
+    @property
+    def function_arity(self) -> int:
+        return len(self.__value.arguments)
+
+    @cached_property
+    def arguments(self) -> tuple["SymbolicTerm", ...]:
+        return tuple(SymbolicTerm.parse(str(argument)) for argument in self.__value.arguments)
+
     def make_copy_of_value(self) -> clingo.ast.AST:
         return copy.deepcopy(self.__value)
+
+    def match(self, pattern: "SymbolicTerm") -> bool:
+        if pattern.is_variable() or self.is_variable():
+            return True
+        if pattern.is_function():
+            return self.is_function() and pattern.function_name == self.function_name and \
+                pattern.function_arity == self.function_arity and \
+                all(argument.match(pattern.arguments[index]) for index, argument in enumerate(self.arguments))
+        return pattern == self
 
 
 @typeguard.typechecked
@@ -297,6 +331,10 @@ class SymbolicAtom:
         return SymbolicAtom.parse("#false")
 
     @staticmethod
+    def of_ground_atom(atom: GroundAtom) -> "SymbolicAtom":
+        return SymbolicAtom.parse(str(atom))
+
+    @staticmethod
     def parse(string: str) -> "SymbolicAtom":
         rule: Final = f":- {string}."
         try:
@@ -311,11 +349,14 @@ class SymbolicAtom:
         literal = program[0].body[0]
         validate("positive", literal.sign, equals=clingo.ast.Sign.NoSign,
                  help_msg=f"Unexpected default negation in {utils.one_line(string)}")
-        atom = literal.atom
+        atom = literal.atom.symbol
         return SymbolicAtom(atom, utils.extract_parsed_string(rule, literal.location), key=SymbolicAtom.__key)
 
     @staticmethod
     def of(value: clingo.ast.AST) -> "SymbolicAtom":
+        validate("value", value.ast_type, is_in=[
+            clingo.ast.ASTType.Function
+        ])
         return SymbolicAtom(value, None, key=SymbolicAtom.__key)
 
     def __str__(self):
@@ -343,6 +384,13 @@ class SymbolicAtom:
     @property
     def strongly_negated(self) -> bool:
         return self.value.negative
+
+    def match(self, *pattern: "SymbolicAtom") -> bool:
+        for a_pattern in pattern:
+            if self.predicate == a_pattern.predicate and \
+                    all(argument.match(a_pattern.arguments[index]) for index, argument in enumerate(self.arguments)):
+                return True
+        return False
 
 
 @typeguard.typechecked
@@ -470,6 +518,36 @@ class SymbolicRule:
 
         return self.of(Transformer().visit(self.__value), self.disabled)
 
+    def expand_global_safe_variables(self, *, variables: Iterable[str],
+                                     herbrand_base: "Model") -> tuple["SymbolicRule", ...]:
+        the_variables: Final = set(var for var in variables if var in self.global_safe_variables)
+        validate("variables", set(variables), equals=the_variables)
+        the_predicate: Final = f"substitution_{uuid()}"
+        program = herbrand_base.as_facts + '\n' + \
+            f"{the_predicate}({','.join(the_variables)}) :- {self.body_as_string()}."
+        control = clingo.Control()
+        control.add(program)
+        control.ground([("base", [])])
+        substitutions = tuple(atom.symbol.arguments
+                              for atom in control.symbolic_atoms.by_signature(the_predicate, len(the_variables)))
+        return tuple(
+            self.apply_variable_substitution(
+                **{var: SymbolicTerm.parse(str(substitution[index])) for index, var in enumerate(the_variables)}
+            ) for substitution in substitutions
+        )
+
+    def match(self, *pattern: SymbolicAtom) -> bool:
+        class Transformer(clingo.ast.Transformer):
+            def visit_SymbolicAtom(self, node):
+                atom = SymbolicAtom.of(node.symbol)
+                if atom.match(*pattern):
+                    Transformer.matched = True
+                return node
+        Transformer.matched = False
+
+        Transformer().visit(self.__value)
+        return Transformer.matched
+
 
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True)
@@ -572,6 +650,30 @@ class SymbolicProgram:
                  help_msg=f"{len(statements_queue)} unterminated __with__ statements")
 
         return SymbolicProgram.of(rules)
+
+    def expand_global_safe_variables(self, *, rule: SymbolicRule, variables: Iterable[str]) -> "SymbolicProgram":
+        rules = []
+        for __rule in self.__rules:
+            if rule != __rule:
+                rules.append(__rule)
+            else:
+                rules.extend(__rule.expand_global_safe_variables(variables=variables, herbrand_base=self.herbrand_base))
+        return SymbolicProgram.of(rules)
+
+    def move_up(self, *pattern: SymbolicAtom) -> "SymbolicProgram":
+        def key(rule: SymbolicRule):
+            return 0 if rule.match(*pattern) else 1
+        return SymbolicProgram.of(sorted([rule for rule in self.__rules], key=key))
+
+    def query_herbrand_base(self, query_head_arguments: str, query_body: str,
+                            aux_program: Optional["SymbolicProgram"] = None) -> tuple[SymbolicAtom, ...]:
+        predicate = f"__query_{uuid()}__"
+        program = SymbolicProgram.parse(f"{self.herbrand_base.as_facts}\n"
+                                        f"{predicate}({query_head_arguments}) :- {query_body}.")
+        if aux_program is not None:
+            program = SymbolicProgram.of(*program, *aux_program)
+        model = Model.of_program(program).filter(lambda atom: atom.predicate.name == predicate)
+        return tuple(SymbolicAtom.of_ground_atom(atom) for atom in model)
 
 
 @typeguard.typechecked
