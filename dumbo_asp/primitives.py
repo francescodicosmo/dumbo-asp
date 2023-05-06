@@ -529,14 +529,11 @@ class SymbolicRule:
             return (self,)
         the_variables: Final = set(var for var in variables if var in self.global_safe_variables)
         validate("variables", set(variables), equals=the_variables)
-        the_predicate: Final = f"substitution_{uuid()}"
-        program = herbrand_base.as_facts + '\n' + \
-                  f"{the_predicate}({','.join(the_variables)}) :- {self.body_as_string()}."
-        control = clingo.Control()
-        control.add(program)
-        control.ground([("base", [])])
-        substitutions = tuple(atom.symbol.arguments
-                              for atom in control.symbolic_atoms.by_signature(the_predicate, len(the_variables)))
+        substitutions = herbrand_base.compute_substitutions(
+            arguments=','.join(the_variables),
+            number_of_arguments=len(the_variables),
+            conjunctive_query=self.body_as_string(),
+        )
         return tuple(
             self.apply_variable_substitution(
                 **{var: SymbolicTerm.parse(str(substitution[index])) for index, var in enumerate(the_variables)}
@@ -550,31 +547,28 @@ class SymbolicRule:
                 self.substitutions = []
 
             def visit_ConditionalLiteral(self, node):
-                the_predicate: Final = f"substitution_{uuid()}"
-                head = SymbolicAtom.parse(f"{the_predicate}_{node.literal.atom}")
-                program = \
-                    herbrand_base.as_facts + '\n' + \
-                    f"{head} :- {', '.join(str(condition) for condition in node.condition)}."
-                control = clingo.Control()
-                control.add(program)
-                control.ground([("base", [])])
+                substitutions = herbrand_base.compute_substitutions(
+                    arguments=','.join(str(arg) for arg in node.literal.atom.symbol.arguments),
+                    number_of_arguments=len(node.literal.atom.symbol.arguments),
+                    conjunctive_query=f"{', '.join(str(condition) for condition in node.condition)}",
+                )
+                the_uuid: Final = f"__uuid_{uuid()}__"
                 self.substitutions.append(
                     (
-                        the_predicate,
+                        the_uuid,
                         [
                             (
                                 "not " if node.literal.sign == clingo.ast.Sign.Negation else
                                 "not not " if node.literal.sign == clingo.ast.Sign.DoubleNegation
                                 else ""
                             ) +
-                            f"{node.literal.atom.symbol.name}({','.join(str(arg) for arg in atom.symbol.arguments)})"
-                            for atom in control.symbolic_atoms.by_signature(head.predicate_name, head.predicate_arity)
+                            f"{node.literal.atom.symbol.name}({','.join(str(arg) for arg in arguments)})"
+                            for arguments in substitutions
                         ]
                     )
                 )
-                ground_program = Parser.parse_program(f"{the_predicate}.")
-                validate("one rule", ground_program, length=1)
-                return clingo.ast.Literal(node.location, clingo.ast.Sign.NoSign, ground_program[0].head.atom.symbol)
+                return clingo.ast.Literal(node.location, clingo.ast.Sign.NoSign,
+                                          clingo.ast.Function(node.location, the_uuid, [], False))
 
         result = []
         for partial_ground_rule in self.expand_global_safe_variables(variables=self.global_safe_variables,
@@ -716,7 +710,6 @@ class SymbolicProgram:
             if not rule.disabled or expand_also_disabled_rules:
                 rules.extend(rule.expand_global_and_local_variables(herbrand_base=self.herbrand_base))
             else:
-                print(rule)
                 rules.append(rule)
         return SymbolicProgram.of(rules)
 
@@ -916,3 +909,22 @@ class Model:
     @property
     def block_up(self) -> str:
         return ":- " + ", ".join([f"{atom}" for atom in self]) + '.'
+
+    @cached_property
+    def __compute_substituions_control(self):
+        program = self.as_facts
+        control = clingo.Control()
+        control.add(program)
+        control.ground([("base", [])])
+        return control
+
+    def compute_substitutions(self, *, arguments: str, number_of_arguments: int,
+                              conjunctive_query: str) -> tuple[list[clingo.Symbol], ...]:
+        predicate: Final = f"__query_{uuid()}__"
+        self.__compute_substituions_control.add(predicate, [], f"{predicate}({arguments}) :- {conjunctive_query}.")
+        self.__compute_substituions_control.ground([(predicate, [])])
+        return tuple(
+            atom.symbol.arguments
+            for atom in self.__compute_substituions_control.symbolic_atoms.by_signature(predicate, number_of_arguments)
+        )
+        
