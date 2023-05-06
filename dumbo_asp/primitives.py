@@ -473,6 +473,11 @@ class SymbolicRule:
                 if node.sign == clingo.ast.Sign.NoSign:
                     self.visit_children(node)
 
+            def visit_ConditionalLiteral(self, node):
+                # a conditional literal cannot bound new variables
+                # (this is not the case for "existential" variables, which are not covered at the moment)
+                pass
+
             def visit_BodyAggregate(self, node):
                 for guard in [node.left_guard, node.right_guard]:
                     if guard is not None and guard.comparison == clingo.ast.ComparisonOperator.Equal:
@@ -493,7 +498,7 @@ class SymbolicRule:
         string = self.__parsed_string[:-1] if self.__parsed_string is not None else str(self)[:-1]
         literal = f"{atom}" if sign == clingo.ast.Sign.NoSign else \
             f"not {atom}" if sign == clingo.ast.Sign.Negation else \
-            f"not not {atom}"
+                f"not not {atom}"
         return self.parse(f"{string}; {literal}." if len(self.__value.body) > 0 else f"{string} :- {literal}.",
                           self.disabled)
 
@@ -520,11 +525,13 @@ class SymbolicRule:
 
     def expand_global_safe_variables(self, *, variables: Iterable[str],
                                      herbrand_base: "Model") -> tuple["SymbolicRule", ...]:
+        if not variables:
+            return (self,)
         the_variables: Final = set(var for var in variables if var in self.global_safe_variables)
         validate("variables", set(variables), equals=the_variables)
         the_predicate: Final = f"substitution_{uuid()}"
         program = herbrand_base.as_facts + '\n' + \
-            f"{the_predicate}({','.join(the_variables)}) :- {self.body_as_string()}."
+                  f"{the_predicate}({','.join(the_variables)}) :- {self.body_as_string()}."
         control = clingo.Control()
         control.add(program)
         control.ground([("base", [])])
@@ -535,6 +542,49 @@ class SymbolicRule:
                 **{var: SymbolicTerm.parse(str(substitution[index])) for index, var in enumerate(the_variables)}
             ) for substitution in substitutions
         )
+
+    def expand_global_and_local_variables(self, *, herbrand_base: "Model") -> tuple["SymbolicRule", ...]:
+        class Transformer(clingo.ast.Transformer):
+            def __init__(self):
+                super().__init__()
+                self.substitutions = []
+
+            def visit_ConditionalLiteral(self, node):
+                the_predicate: Final = f"substitution_{uuid()}"
+                head = SymbolicAtom.parse(f"{the_predicate}_{node.literal.atom}")
+                program = \
+                    herbrand_base.as_facts + '\n' + \
+                    f"{head} :- {', '.join(str(condition) for condition in node.condition)}."
+                control = clingo.Control()
+                control.add(program)
+                control.ground([("base", [])])
+                self.substitutions.append(
+                    (
+                        the_predicate,
+                        [
+                            (
+                                "not " if node.literal.sign == clingo.ast.Sign.Negation else
+                                "not not " if node.literal.sign == clingo.ast.Sign.DoubleNegation
+                                else ""
+                            ) +
+                            f"{node.literal.atom.symbol.name}({','.join(str(arg) for arg in atom.symbol.arguments)})"
+                            for atom in control.symbolic_atoms.by_signature(head.predicate_name, head.predicate_arity)
+                        ]
+                    )
+                )
+                ground_program = Parser.parse_program(f"{the_predicate}.")
+                validate("one rule", ground_program, length=1)
+                return clingo.ast.Literal(node.location, clingo.ast.Sign.NoSign, ground_program[0].head.atom.symbol)
+
+        result = []
+        for partial_ground_rule in self.expand_global_safe_variables(variables=self.global_safe_variables,
+                                                                     herbrand_base=herbrand_base):
+            transformer = Transformer()
+            rule = str(self.of(transformer.visit(partial_ground_rule.__value), False))
+            for predicate, atoms in transformer.substitutions:
+                rule = rule.replace(predicate, '; '.join(atoms))
+            result.append(SymbolicRule.parse(rule, disabled=self.disabled))
+        return tuple(result)
 
     def match(self, *pattern: SymbolicAtom) -> bool:
         class Transformer(clingo.ast.Transformer):
@@ -660,6 +710,16 @@ class SymbolicProgram:
                 rules.extend(__rule.expand_global_safe_variables(variables=variables, herbrand_base=self.herbrand_base))
         return SymbolicProgram.of(rules)
 
+    def expand_global_and_local_variables(self, *, expand_also_disabled_rules: bool = False) -> "SymbolicProgram":
+        rules = []
+        for rule in self.__rules:
+            if not rule.disabled or expand_also_disabled_rules:
+                rules.extend(rule.expand_global_and_local_variables(herbrand_base=self.herbrand_base))
+            else:
+                print(rule)
+                rules.append(rule)
+        return SymbolicProgram.of(rules)
+
     def move_up(self, *pattern: SymbolicAtom) -> "SymbolicProgram":
         def key(rule: SymbolicRule):
             return 0 if rule.match(*pattern) else 1
@@ -731,7 +791,7 @@ class Model:
 
     @staticmethod
     def of_atoms(*args: Union[str, clingo.Symbol, GroundAtom,
-                              Iterable[Union[str, clingo.Symbol, GroundAtom]]]) -> "Model":
+    Iterable[Union[str, clingo.Symbol, GroundAtom]]]) -> "Model":
         res = Model.of_elements(*args)
         validate("only atoms", res.contains_only_ground_atoms, equals=True,
                  help_msg="Use Model.of_elements() to create a model with numbers and strings")
@@ -739,7 +799,7 @@ class Model:
 
     @staticmethod
     def of_elements(*args: Union[int, str, clingo.Symbol, GroundAtom,
-                    Iterable[Union[int, str, clingo.Symbol, GroundAtom]]]) -> "Model":
+    Iterable[Union[int, str, clingo.Symbol, GroundAtom]]]) -> "Model":
         def build(atom):
             if type(atom) in [GroundAtom, int]:
                 return atom
@@ -800,6 +860,7 @@ class Model:
             if type(element) is str:
                 return f"__string(\"{element}\")."
             return f"{element}."
+
         return '\n'.join(build(element) for element in self)
 
     def drop(self, predicate: Optional[Predicate] = None, numbers: bool = False, strings: bool = False) -> "Model":
@@ -836,6 +897,7 @@ class Model:
                 atom.predicate_name,
                 [arg if index != argument else term for index, arg in enumerate(atom.arguments, start=1)]
             ))
+
         return self.map(mapping)
 
     def project(self, predicate: Predicate, argument: int) -> "Model":
@@ -848,6 +910,7 @@ class Model:
                 atom.predicate_name,
                 [arg for index, arg in enumerate(atom.arguments, start=1) if index != argument]
             ))
+
         return self.map(mapping)
 
     @property

@@ -386,3 +386,71 @@ block((sub, Row', Col'), (Row, Col)) :- Row = 1..9; Col = 1..9; Row' = (Row-1) /
         "block((sub, Row', Col'), (Row, Col)), block((sub, Row', Col'), (7, 9))"
     )
     assert len(res) == 9
+
+
+def test_expand_conditional_literal():
+    program = SymbolicProgram.parse("""
+{a(1..3)}.
+b :- a(X) : X = 1..3.
+    """)
+    program = program.expand_global_and_local_variables()
+    assert str(program) == """
+{ a(1); a(2); a(3) }.
+b :- a(1); a(2); a(3).
+    """.strip()
+
+
+def test_expand_negative_conditional_literal():
+    program = SymbolicProgram.parse("""
+{a(1..3)}.
+b :- not a(X) : X = 1..3.
+    """)
+    program = program.expand_global_and_local_variables()
+    assert str(program) == """
+{ a(1); a(2); a(3) }.
+b :- not a(1); not a(2); not a(3).
+    """.strip()
+
+
+def test_expand_conditional_literal_in_aggregate():
+    program = SymbolicProgram.parse("""
+{a(1..3)}.
+b :- #sum{X : a(X)} >= 3.
+    """)
+    program = program.expand_global_and_local_variables()
+    assert str(program) == """
+{ a(1); a(2); a(3) }.
+b :- 3 <= #sum { X: a(X) }.
+    """.strip()
+
+
+def test_expand_skips_disabled_rules_by_default():
+    program = SymbolicProgram.of(SymbolicRule.parse("""
+{a(X) : X = 1..3}.
+    """).disable())
+    program = program.expand_global_and_local_variables()
+    assert str(program) == """
+%* {a(X) : X = 1..3}. *%
+    """.strip()
+
+
+def test_expand_disabled_rule():
+    program = SymbolicProgram.of(SymbolicRule.parse("""
+{a(X) : X = 1..3}.
+    """).disable())
+    program = program.expand_global_and_local_variables(expand_also_disabled_rules=True)
+    assert str(program) == """
+%* { a(1); a(2); a(3) }. *%
+    """.strip()
+
+
+def test_expand_disabled_rule_into_several_rules():
+    program = SymbolicProgram.of(SymbolicRule.parse("""
+a(X) :- X = 1..3.
+    """).disable())
+    program = program.expand_global_and_local_variables(expand_also_disabled_rules=True)
+    assert str(program) == """
+%* a(1) :- 1 = (1..3). *%
+%* a(2) :- 2 = (1..3). *%
+%* a(3) :- 3 = (1..3). *%
+    """.strip()
