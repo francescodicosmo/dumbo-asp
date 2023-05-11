@@ -454,3 +454,13 @@ a(X) :- X = 1..3.
 %* a(2) :- 2 = (1..3). *%
 %* a(3) :- 3 = (1..3). *%
     """.strip()
+
+
+def test_expand_global_variables_in_rule_with_negation():
+    program = SymbolicProgram.parse("""
+{b(1)}.
+{c(1)}.
+a(X) :- b(X), not c(X).
+    """)
+    program = program.expand_global_safe_variables(rule=program[-1], variables=["X"])
+    assert len(program) == 3

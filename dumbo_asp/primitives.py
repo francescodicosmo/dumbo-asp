@@ -856,6 +856,17 @@ class Model:
 
         return '\n'.join(build(element) for element in self)
 
+    @property
+    def as_choice_rules(self) -> str:
+        def build(element):
+            if type(element) is int:
+                return f"{{__number({element})}}."
+            if type(element) is str:
+                return f"{{__string(\"{element}\")}}."
+            return f"{{{element}}}."
+
+        return '\n'.join(build(element) for element in self)
+
     def drop(self, predicate: Optional[Predicate] = None, numbers: bool = False, strings: bool = False) -> "Model":
         def when(element):
             if type(element) is GroundAtom:
@@ -912,7 +923,7 @@ class Model:
 
     @cached_property
     def __compute_substituions_control(self):
-        program = self.as_facts
+        program = self.as_choice_rules
         control = clingo.Control()
         control.add(program)
         control.ground([("base", [])])
