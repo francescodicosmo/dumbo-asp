@@ -1,3 +1,4 @@
+from uuid import uuid4
 from pathlib import Path
 from typing import Final
 
@@ -24,3 +25,7 @@ def extract_parsed_string(string: str, location: clingo.ast.Location) -> str:
 @typeguard.typechecked
 def one_line(string: str) -> str:
     return NEW_LINE_SYMBOL.join(string.split('\n'))
+
+
+def uuid() -> str:
+    return str(uuid4()).replace('-', '_')
