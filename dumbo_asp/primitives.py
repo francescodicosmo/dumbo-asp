@@ -2,7 +2,6 @@ import copy
 import dataclasses
 import functools
 import math
-import uuid
 from collections import OrderedDict
 import pathlib
 import sys
@@ -951,9 +950,6 @@ class Model:
         )
 
 
-def uuid_string():
-    return str(uuid.uuid4()).replace('-', '_')
-
 class PredicateRenamer(clingo.ast.Transformer):
     def __init__(self, static_id, internal_id, mapping_relation: tuple = None) -> None:
         super().__init__()
@@ -1078,7 +1074,7 @@ class ModuleMapper(clingo.ast.Transformer):
 class Module:
     def __init__(self, name: str, program: str | SymbolicProgram):
         self.name = name
-        self.__static_uuid = uuid_string()
+        self.__static_uuid = uuid()
 
         if type(program) is SymbolicProgram:
             program = str(program)
@@ -1095,7 +1091,7 @@ class Module:
         return self._program == ""
 
     def rewrite(self, mapping_relation: tuple = None) -> str:
-        transformer = PredicateRenamer(self.__static_uuid, uuid_string(), mapping_relation=mapping_relation)
+        transformer = PredicateRenamer(self.__static_uuid, uuid(), mapping_relation=mapping_relation)
         return transformer.apply(self._program)
 
 
