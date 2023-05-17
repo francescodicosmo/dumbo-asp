@@ -512,6 +512,17 @@ __end__.
     """.strip()
 
 
+def test_module_instantiation_can_rename_global_predicates_as_local_predicates():
+    module = Module(name=Module.Name.parse("main"), program=SymbolicProgram.parse("foo."))
+    assert str(module.instantiate(foo=Predicate.parse("__foo"))) == "__foo."
+
+
+def test_module_instantiation_cannot_rename_local_predicates():
+    module = Module(name=Module.Name.parse("main"), program=SymbolicProgram.of())
+    with pytest.raises(ValueError):
+        module.instantiate(__foo=Predicate.parse("bar"))
+
+
 @patch("dumbo_asp.utils.uuid", side_effect=[
     "ebc40a28_de77_494a_a139_972343be51a8",
     "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
@@ -583,3 +594,44 @@ __end__.
     """)
     with pytest.raises(KeyError):
         Module.expand_program(program)
+
+
+@patch("dumbo_asp.utils.uuid", side_effect=[
+    "ebc40a28_de77_494a_a139_972343be51a8",
+    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
+    "ae2179b9_607d_44ed_b51c_08b590679ca1",
+    "c21258ac_b2ed_4d20_a7a1_ae72332b3f55",
+    "3a412a2f_5d34_4ebc_ae4b_d4a83bfd6107",
+    "88456e97_a0e1_4c79_b470_bd7eb3537561",
+])
+def test_module_expand_apply_modules_inside_modules(uuid_patch):
+    program = SymbolicProgram.parse("""
+__module__(transitive_closure).
+    tc(X,Y) :- r(X,Y).
+    tc(X,Z) :- tc(X,Y), r(Y,Z).
+__end__.
+
+__module__(transitive_closure_check).
+    __apply_module__(transitive_closure, (tc, __tc)).
+    :- __tc(X,X).
+__end__.
+
+
+link(a,b).
+link(b,a).
+__apply_module__(transitive_closure_check, (r, link)).
+    """.strip())
+    program = Module.expand_program(program)
+    assert str(program) == """
+link(a,b).
+link(b,a).
+%* __apply_module__(transitive_closure_check, (r, link)). *%
+%* __apply_module__(transitive_closure,(tc,__tc)). *%
+__tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Y) :- link(X,Y).
+__tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Z) :- __tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Y); link(Y,Z).
+%* __end__. *%
+#false :- __tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,X).
+%* __end__. *%
+    """.strip()
+    with pytest.raises(Model.NoModelError):
+        Model.of_program(program)

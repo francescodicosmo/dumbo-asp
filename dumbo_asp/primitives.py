@@ -354,7 +354,11 @@ class SymbolicAtom:
         literal = program[0].body[0]
         validate("positive", literal.sign, equals=clingo.ast.Sign.NoSign,
                  help_msg=f"Unexpected default negation in {utils.one_line(string)}")
-        atom = literal.atom.symbol
+        if "value" in literal.atom.keys():
+            validate("#false", literal.atom.value, equals=0)
+            atom = SymbolicAtom.parse("foo").__value.update(name="#false")
+        else:
+            atom = literal.atom.symbol
         return SymbolicAtom(atom, utils.extract_parsed_string(rule, literal.location), key=SymbolicAtom.__key)
 
     @staticmethod
@@ -376,6 +380,8 @@ class SymbolicAtom:
 
     @property
     def predicate_name(self) -> str:
+        if self.__value.name == '#false':
+            return self.__value.name
         return self.predicate.name
 
     @property
@@ -443,6 +449,9 @@ class SymbolicRule:
 
     @property
     def head_atom(self) -> SymbolicAtom:
+        if "value" in self.__value.head.atom.keys():
+            validate("#false", self.__value.head.atom.value, equals=0)
+            return SymbolicAtom.of_false()
         return SymbolicAtom.of(self.__value.head.atom.symbol)
 
     @cached_property
@@ -1044,14 +1053,14 @@ class Module:
                     validate("mapping args", argument.function_name, equals='')
                     validate("mapping args", argument.function_arity, equals=2)
                     validate("mapping args", argument.arguments[0].is_function(), equals=True)
-                    validate("mapping args", argument.arguments[0].function_name.startswith('__'), equals=False)
                     validate("mapping args", argument.arguments[0].function_arity, equals=0)
                     validate("mapping args", argument.arguments[1].is_function(), equals=True)
-                    validate("mapping args", argument.arguments[1].function_name.startswith('__'), equals=False)
                     validate("mapping args", argument.arguments[1].function_arity, equals=0)
                     mapping[argument.arguments[0].function_name] = Predicate.parse(argument.arguments[1].function_name)
-                res += [rule.disable(), *module.instantiate(**mapping)]
-
+                if module_under_read is None:
+                    res += [rule.disable(), *module.instantiate(**mapping)]
+                else:
+                    module_under_read[1].extend([rule.disable(), *module.instantiate(**mapping)])
             elif module_under_read is not None:
                 module_under_read[1].append(rule)
             else:
