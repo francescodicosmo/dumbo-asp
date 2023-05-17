@@ -1,9 +1,11 @@
+from unittest.mock import patch
+
 import clingo
 import clingo.ast
 import pytest
 
 from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicRule, SymbolicProgram, SymbolicAtom, \
-    SymbolicTerm
+    SymbolicTerm, Module
 
 
 def test_parser_error():
@@ -204,6 +206,18 @@ b :-  a.
     assert str(program[-1]) == string.split('\n')[-1]
 
 
+def test_symbolic_rule_predicates():
+    assert set(SymbolicRule.parse("a(X) :- b(X), not c(X).").predicates) == \
+           set(Predicate.parse(p) for p in "a b c".split())
+
+
+def test_symbolic_program_predicates():
+    assert set(SymbolicProgram.parse("""
+a(X) :- b(X), not c(X).
+:- #sum{X,d(X) : e(X)} = Y.
+    """.strip()).predicates) == set(Predicate.parse(p) for p in "a b c e".split())
+
+
 def test_symbolic_rule_head_variables():
     assert SymbolicRule.parse("a(X) :- b(X,Y).").head_variables == ("X",)
     assert SymbolicRule.parse("{a(X,Z) : c(Z)} = 1 :- b(X,Y).").head_variables == ("X", "Z")
@@ -342,6 +356,7 @@ def test_symbolic_term_string():
 
 
 def test_symbolic_term_function():
+    term = SymbolicTerm.parse("foo")
     term = SymbolicTerm.parse("foo(bar)")
     assert term.is_function()
     assert term.function_name == "foo"
@@ -464,3 +479,107 @@ a(X) :- b(X), not c(X).
     """)
     program = program.expand_global_safe_variables(rule=program[-1], variables=["X"])
     assert len(program) == 3
+
+
+def test_predicate_renaming_in_symbolic_rule():
+    rule = SymbolicRule.parse("a(b) :- b(a).")
+    rule = rule.apply_predicate_renaming(a=Predicate.parse("c"))
+    assert str(rule) == "c(b) :- b(a)."
+
+
+def test_predicate_renaming_in_symbolic_program():
+    program = SymbolicProgram.parse("""
+a(b) :- b(a).
+:- foo, bar, a(a), not a(0).
+    """.strip()).apply_predicate_renaming(a=Predicate.parse("c"))
+    assert str(program) == """
+c(b) :- b(a).
+#false :- foo; bar; c(a); not c(0).
+    """.strip()
+
+
+def test_module_str():
+    program = SymbolicProgram.parse("""
+a :- not __a.
+__a :- not a.
+    """.strip())
+    module = Module(name=Module.Name.parse("main"), program=program)
+    assert str(module) == """
+__module__(main).
+a :- not __a.
+__a :- not a.
+__end__.
+    """.strip()
+
+
+@patch("dumbo_asp.utils.uuid", side_effect=[
+    "ebc40a28_de77_494a_a139_972343be51a8",
+    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
+    "ae2179b9_607d_44ed_b51c_08b590679ca1",
+])
+def test_module_instantiation(uuid_patch):
+    program = SymbolicProgram.parse("""
+pred :- not __false.
+__false :- not pred.
+__static_foo.
+    """.strip())
+    module = Module(name=Module.Name.parse("main"), program=program)
+    assert str(module.instantiate(pred=Predicate.parse("a"))) == f"""
+a :- not __false_29f7b13e_a41f_4de4_944a_5fb8e61b513c.
+__false_29f7b13e_a41f_4de4_944a_5fb8e61b513c :- not a.
+_static_foo_ebc40a28_de77_494a_a139_972343be51a8.
+    """.strip()
+    assert str(module.instantiate(pred=Predicate.parse("b"))) == f"""
+b :- not __false_ae2179b9_607d_44ed_b51c_08b590679ca1.
+__false_ae2179b9_607d_44ed_b51c_08b590679ca1 :- not b.
+_static_foo_ebc40a28_de77_494a_a139_972343be51a8.
+    """.strip()
+
+
+@patch("dumbo_asp.utils.uuid", side_effect=[
+    "ebc40a28_de77_494a_a139_972343be51a8",
+    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
+    "ae2179b9_607d_44ed_b51c_08b590679ca1",
+])
+def test_module_expand_program(uuid_patch):
+    program = SymbolicProgram.parse("""
+__module__(choice).
+    predicate(X) :- condition(X), not __false(X).
+    __false(X) :- condition(X), not predicate(X).
+__end__.
+
+edb(1..3).
+__apply_module__(choice, (predicate, a), (condition, edb)).
+    """)
+    program = Module.expand_program(program)
+    assert str(program) == """
+edb(1..3).
+%* __apply_module__(choice, (predicate, a), (condition, edb)). *%
+a(X) :- edb(X); not __false_29f7b13e_a41f_4de4_944a_5fb8e61b513c(X).
+__false_29f7b13e_a41f_4de4_944a_5fb8e61b513c(X) :- edb(X); not a(X).
+%* __end__. *%
+    """.strip()
+
+
+def test_module_expand_program_requires_modules_to_be_declared_before_they_are_expanded():
+    program = SymbolicProgram.parse("""
+edb(1..3).
+__apply_module__(choice, (predicate, a), (condition, edb)).
+
+__module__(choice).
+    predicate(X) :- condition(X), not __false(X).
+    __false(X) :- condition(X), not predicate(X).
+__end__.
+    """)
+    with pytest.raises(KeyError):
+        Module.expand_program(program)
+
+
+def test_module_expand_program_cannot_expand_a_module_inside_itself():
+    program = SymbolicProgram.parse("""
+__module__(foo).
+    __apply_module__(foo).
+__end__.
+    """)
+    with pytest.raises(KeyError):
+        Module.expand_program(program)

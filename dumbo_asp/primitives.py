@@ -2,14 +2,10 @@ import copy
 import dataclasses
 import functools
 import math
-from collections import OrderedDict
-import pathlib
 import sys
-
 from dataclasses import InitVar
 from functools import cached_property, cache
 from typing import Callable, Optional, Iterable, Union, Any, Final
-from typing import Sequence
 
 import clingo
 import clingo.ast
@@ -20,9 +16,6 @@ from dumbo_utils.validation import validate, ValidationError
 from dumbo_asp import utils
 from dumbo_asp.utils import uuid
 
-
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
 
 @typeguard.typechecked
 class Parser:
@@ -246,9 +239,8 @@ class SymbolicTerm:
 
     def __post_init__(self, key: PrivateKey):
         self.__key.validate(key)
-        validate("type", self.__value.ast_type, is_in=[
-            clingo.ast.ASTType.SymbolicTerm, clingo.ast.ASTType.Function, clingo.ast.ASTType.Variable
-        ])
+        validate("type", self.__value.ast_type, is_in=[clingo.ast.ASTType.SymbolicTerm, clingo.ast.ASTType.Function,
+                                                       clingo.ast.ASTType.Variable])
 
     @staticmethod
     def parse(string: str) -> "SymbolicTerm":
@@ -280,13 +272,17 @@ class SymbolicTerm:
         return self.__parsed_string or str(self.__value)
 
     def is_int(self) -> bool:
-        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and self.__value.symbol.number is not None
+        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and \
+            self.__value.symbol.type == clingo.SymbolType.Number
 
     def is_string(self) -> bool:
-        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and self.__value.symbol.string is not None
+        return self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and \
+            self.__value.symbol.type == clingo.SymbolType.String
 
     def is_function(self) -> bool:
-        return self.__value.ast_type == clingo.ast.ASTType.Function
+        return self.__value.ast_type == clingo.ast.ASTType.Function or \
+            self.__value.ast_type == clingo.ast.ASTType.SymbolicTerm and \
+            self.__value.symbol.type == clingo.SymbolType.Function
 
     def is_variable(self) -> bool:
         return self.__value.ast_type == clingo.ast.ASTType.Variable
@@ -296,11 +292,12 @@ class SymbolicTerm:
 
     @property
     def function_name(self) -> str:
-        return self.__value.name
+        return self.__value.name if self.__value.ast_type == clingo.ast.ASTType.Function else self.__value.symbol.name
 
     @property
     def function_arity(self) -> int:
-        return len(self.__value.arguments)
+        return len(self.__value.arguments if self.__value.ast_type == clingo.ast.ASTType.Function else
+                   self.__value.symbol.arguments)
 
     @cached_property
     def arguments(self) -> tuple["SymbolicTerm", ...]:
@@ -499,6 +496,26 @@ class SymbolicRule:
         Transformer().visit_sequence(self.__value.body)
         return tuple(sorted(res))
 
+    @cached_property
+    def predicates(self) -> tuple[Predicate, ...]:
+        res = set()
+
+        class Transformer(clingo.ast.Transformer):
+            def visit_Function(self, node):
+                res.add(node.name)
+                return node
+
+            def visit_Literal(self, node):
+                if "symbol" in node.atom.keys():
+                    res.add(node.atom.symbol.name)
+                elif "elements" in node.atom.keys():
+                    for element in node.atom.elements:
+                        self.visit(element.update(terms=[]))
+                return node
+
+        Transformer().visit(self.__value)
+        return tuple(Predicate.parse(pred) for pred in res)
+
     def disable(self) -> "SymbolicRule":
         return SymbolicRule(self.__value, self.__parsed_string, True, key=self.__key)
 
@@ -528,6 +545,13 @@ class SymbolicRule:
                 if str(node) not in kwargs.keys():
                     return node
                 return kwargs[str(node)].make_copy_of_value()
+
+        return self.of(Transformer().visit(self.__value), self.disabled)
+
+    def apply_predicate_renaming(self, **kwargs: Predicate) -> "SymbolicRule":
+        class Transformer(clingo.ast.Transformer):
+            def visit_Function(self, node):
+                return node.update(name=kwargs[node.name].name) if node.name in kwargs.keys() else node
 
         return self.of(Transformer().visit(self.__value), self.disabled)
 
@@ -660,6 +684,13 @@ class SymbolicProgram:
         control.ground([("base", [])])
         return Model.of_atoms(atom.symbol for atom in control.symbolic_atoms)
 
+    @cached_property
+    def predicates(self) -> tuple[Predicate, ...]:
+        res = set()
+        for rule in self:
+            res.update(rule.predicates)
+        return tuple(res)
+
     @cache
     def process_constants(self) -> "SymbolicProgram":
         rules = []
@@ -702,6 +733,9 @@ class SymbolicProgram:
                  help_msg=f"{len(statements_queue)} unterminated __with__ statements")
 
         return SymbolicProgram.of(rules)
+
+    def apply_predicate_renaming(self, **kwargs: Predicate) -> "SymbolicProgram":
+        return SymbolicProgram.of(rule.apply_predicate_renaming(**kwargs) for rule in self)
 
     def expand_global_safe_variables(self, *, rule: SymbolicRule, variables: Iterable[str]) -> "SymbolicProgram":
         rules = []
@@ -758,25 +792,25 @@ class Model:
         return Model(key=Model.__key, value=())
 
     @staticmethod
-    def of_control(control: clingo.Control) -> "list[Model]":
+    def of_control(control: clingo.Control) -> "Model":
         def on_model(model):
-#            if on_model.cost is not None and on_model.cost <= model.cost:
-#                on_model.exception = True
-            on_model.cost.append(model.cost)
-            on_model.res.append(Model.of_elements(model.symbols(shown=True)))
-        on_model.cost = []
-        on_model.res = []
+            if on_model.cost is not None and on_model.cost <= model.cost:
+                on_model.exception = True
+            on_model.cost = model.cost
+            on_model.res = Model.of_elements(model.symbols(shown=True))
+        on_model.cost = None
+        on_model.res = None
         on_model.exception = False
 
         control.solve(on_model=on_model)
-        if not on_model.res: # the list is empty
+        if not on_model.res:
             raise Model.NoModelError
         if on_model.exception:
             raise Model.MultipleModelsError
         return on_model.res
 
     @staticmethod
-    def of_program(*args: str | SymbolicProgram | Iterable[str | SymbolicProgram], arguments: Sequence[str] = []) -> "list[Model]":
+    def of_program(*args: str | SymbolicProgram | Iterable[str | SymbolicProgram]) -> "Model":
         program = []
 
         for arg in args:
@@ -786,23 +820,20 @@ class Model:
                 program.append(str(arg))
             else:
                 program.extend(str(elem) for elem in arg)
-#        control = clingo.Control()
-        control = clingo.Control(arguments=arguments)
+        control = clingo.Control()
         control.add('\n'.join(program))
         control.ground([("base", [])])
         return Model.of_control(control)
 
     @staticmethod
-    def of_atoms(*args: Union[str, clingo.Symbol, GroundAtom,
-    Iterable[Union[str, clingo.Symbol, GroundAtom]]]) -> "Model":
+    def of_atoms(*args: Union[str, clingo.Symbol, GroundAtom, Iterable[Union[str, clingo.Symbol, GroundAtom]]]) -> "Model":
         res = Model.of_elements(*args)
         validate("only atoms", res.contains_only_ground_atoms, equals=True,
                  help_msg="Use Model.of_elements() to create a model with numbers and strings")
         return res
 
     @staticmethod
-    def of_elements(*args: Union[int, str, clingo.Symbol, GroundAtom,
-    Iterable[Union[int, str, clingo.Symbol, GroundAtom]]]) -> "Model":
+    def of_elements(*args: Union[int, str, clingo.Symbol, GroundAtom, Iterable[Union[int, str, clingo.Symbol, GroundAtom]]]) -> "Model":
         def build(atom):
             if type(atom) in [GroundAtom, int]:
                 return atom
@@ -950,224 +981,101 @@ class Model:
         )
 
 
-class PredicateRenamer(clingo.ast.Transformer):
-    def __init__(self, static_id, internal_id, mapping_relation: tuple = None) -> None:
-        super().__init__()
-        self.__static_id = static_id
-        self.__id = internal_id
-#        self.__input_relation = ("","")
-#        self.__output_relation = ("","")
-        # The dictionary of all mapping_relation defined by the user
-        self.__mappings = {}
-
-
-        if mapping_relation is not None:
-#            if len(mapping_relation) > 2:
-#                raise ValueError("The input tuple must contain only two tuples")
-
-            for relation in mapping_relation:
-                if not isinstance(relation, tuple) or not isinstance(relation, tuple):
-                    raise ValueError("Mapping relation must be a tuple")
-                self.__mappings[relation[0]] = relation[1]
-
-#            self.__input_relation = mapping_relation[0]
-#            self.__output_relation = mapping_relation[1]
-
-    def apply(self, string):
-        res = []
-
-        def callback(obj):
-            line = str(self.__call__(obj))
-            if line == "#show /0.":
-                line = "#show."
-            elif line == "#program base.":
-                return
-            res.append(line)
-
-#        print(string)
-        clingo.ast.parse_string(string, callback)
-        return '\n'.join(res)
-
-    def visit_Function(self, node):
-        # if node.name == self.__input_relation[0]:
-        #    node = node.update(name=f'{self.__input_relation[1]}')
-        # elif node.name==self.__output_relation[0]:
-        #    node = node.update(name=f'{self.__output_relation[1]}')
-        # print(self.__mappings[node.name])
-        if self.__mappings.get(node.name) is not None:
-            node = node.update(name=f'{self.__mappings[node.name]}')
-
-        if node.name.startswith("__static_"):
-            return node.update(name=f'{node.name}___{self.__static_id}')
-        elif node.name.startswith("__") and not node.name.startswith("___"):
-            return node.update(name=f'{node.name}___{self.__id}')
-        return node
-
-import ast
-class ModuleMapper(clingo.ast.Transformer):
-    def __init__(self) -> None:
-        super().__init__()
-
-        self.resulting_modules = {}
-        self.current_module_name = "main"
-        self.modules_to_apply = []
-
-        # Track modules which have been correctly closed
-        self.closed_modules = {}
-
-
-    def apply(self, string):
-        def callback(obj):
-            line = str(self.__call__(obj))
-            if line == "#show /0.":
-                line = "#show."
-            elif line == "#program base.":
-                return
-
-            if self.resulting_modules.get(self.current_module_name) is None:
-                self.resulting_modules[self.current_module_name] = []
-
-            if line is not None and line != "":
-                self.resulting_modules[self.current_module_name].append(line)
-
-        clingo.ast.parse_string(str(string), callback)
-
-        # for each key zip the array in a string and create the Module object
-        for key in self.resulting_modules:
-            self.resulting_modules[key] = "\n".join(self.resulting_modules[key])
-
-        return self.resulting_modules, self.modules_to_apply
-
-    def visit_Rule(self, node):
-        node_str = str(node)
-        if node_str.startswith("__module__"):
-            #print(str(node.head.atom.symbol.arguments[0]).replace("\"", ""))
-            if len(node.head.atom.symbol.arguments) != 1:
-                raise ValueError("Module must have only a name")
-
-            if self.current_module_name != "main" and not self.closed_modules[self.current_module_name]:
-                eprint(f"Warning: module \"{self.current_module_name}\" not closed")
-
-            self.current_module_name = str(node.head.atom.symbol.arguments[0]).replace("\"", "")
-            self.closed_modules[self.current_module_name] = False
-
-            return ""
-
-        if node_str.startswith("__end__"):
-            self.current_module_name = "main"
-            self.closed_modules[self.current_module_name] = True
-            return ""
-
-        if node_str.startswith("__apply_module__"):
-            if self.current_module_name != "main" and not self.closed_modules[self.current_module_name]:
-                eprint(f"Warning: module \"{self.current_module_name}\" not closed")
-            mappings = None
-            if len(node.head.atom.symbol.arguments) > 1:
-                mappings = ast.literal_eval(str(node.head.atom.symbol.arguments[1]))
-            self.modules_to_apply.append((str(node.head.atom.symbol.arguments[0]).replace("\"", ""), mappings))
-
-            self.current_module_name = "main"
-            return ""
-        return node
-
-
-class Module:
-    def __init__(self, name: str, program: str | SymbolicProgram):
-        self.name = name
-        self.__static_uuid = uuid()
-
-        if type(program) is SymbolicProgram:
-            program = str(program)
-
-        self._program = program
-
-    def __str__(self):
-        return f"__module__(\"{self.name}\").\n{self._program}\n__end__."
-
-    def __repr__(self):
-        return f"Module(name={self.name}, program={self._program})"
-
-    def is_empty_program(self) -> bool:
-        return self._program == ""
-
-    def rewrite(self, mapping_relation: tuple = None) -> str:
-        transformer = PredicateRenamer(self.__static_uuid, uuid(), mapping_relation=mapping_relation)
-        return transformer.apply(self._program)
-
-
-
-
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True)
-class Program(Module):
+class Module:
+    @dataclasses.dataclass(frozen=True)
+    class Name:
+        value: str
+        key: InitVar[PrivateKey]
+        __key = PrivateKey()
 
-    # the dictionary of submodules added to the class program
-    # key: module name
-    # value: (module obj, boolean: isApplied)
-    submodules = OrderedDict()
-    # the final (full) program - set of all subprograms
-    __end_program = ""
+        def __post_init__(self, key: PrivateKey):
+            self.__key.validate(key)
 
-    class NoModuleNameError(ValueError):
-        def __init__(self, *args):
-            super().__init__("no module name error", *args)
+        @staticmethod
+        def parse(name: str) -> "Module.Name":
+            term = Parser.parse_ground_term(name)
+            validate("name", term.type, equals=clingo.SymbolType.Function)
+            validate("name", term.arguments, length=0)
+            validate("name", term.negative, equals=False)
+            return Module.Name(
+                value=term.name,
+                key=Module.Name.__key,
+            )
 
-    @staticmethod
-    def load(file: str | pathlib.Path) -> None:
-        parsed_file = None
+        def __str__(self):
+            return self.value
 
-        if isinstance(file, pathlib.Path):
-            with open(file, "r") as f:
-                parsed_file = SymbolicProgram.parse(f.read())
-        elif type(file) is str:
-            parsed_file = SymbolicProgram.parse(file)
-        else:
-            raise TypeError("file must be a string or a pathlib.Path instance")
-
-        transformer = ModuleMapper()
-        new_modules, to_apply = transformer.apply(str(parsed_file))
-
-        for module in new_modules:
-            Program.add_module(new_modules[module], name=module)
-
-        for apply in to_apply:
-            Program.apply_module(apply[0], mapping_relation=apply[1])
-
-
+    name: "Module.Name"
+    program: SymbolicProgram
+    __static_uuid: str = dataclasses.field(default_factory=lambda: utils.uuid(), init=False)
 
     @staticmethod
-    def add_module(arg: str | SymbolicProgram, name: str = "main") -> None:
+    def expand_program(program: SymbolicProgram) -> SymbolicProgram:
+        modules = {}
+        module_under_read = None
+        res = []
+        for rule in program:
+            if rule.head_atom.predicate_name == "__module__":
+                validate("empty body", rule.is_fact, equals=True)
+                validate("arity 1", rule.head_atom.predicate_arity, equals=1)
+                validate("no nesting", module_under_read is None, equals=True)
+                validate("not seen", rule.head_atom.predicate.name not in modules, equals=True)
+                module_under_read = (rule.head_atom.arguments[0].function_name, [])
+            elif rule.head_atom.predicate_name == "__end__":
+                validate("empty body", rule.is_fact, equals=True)
+                validate("arity 0", rule.head_atom.predicate_arity, equals=0)
+                validate("not in a module", module_under_read)
+                module_under_read[1].append(rule.disable())
+                modules[module_under_read[0]] = Module(name=Module.Name.parse(module_under_read[0]),
+                                                       program=SymbolicProgram.of(module_under_read[1]))
+                module_under_read = None
+            elif rule.head_atom.predicate_name == "__apply_module__":
+                validate("empty body", rule.is_fact, equals=True)
+                validate("arity >= 1", rule.head_atom.predicate_arity, min_value=1)
+                validate("arg#0", rule.head_atom.arguments[0].is_function(), equals=True)
+                validate("arg#0", rule.head_atom.arguments[0].function_arity, equals=0)
+                validate("arg#0", rule.head_atom.arguments[0].function_name, is_in=modules.keys())
+                module = modules[rule.head_atom.arguments[0].function_name]
+                mapping = {}
+                for argument in rule.head_atom.arguments[1:]:
+                    validate("mapping args", argument.is_function(), equals=True)
+                    validate("mapping args", argument.function_name, equals='')
+                    validate("mapping args", argument.function_arity, equals=2)
+                    validate("mapping args", argument.arguments[0].is_function(), equals=True)
+                    validate("mapping args", argument.arguments[0].function_name.startswith('__'), equals=False)
+                    validate("mapping args", argument.arguments[0].function_arity, equals=0)
+                    validate("mapping args", argument.arguments[1].is_function(), equals=True)
+                    validate("mapping args", argument.arguments[1].function_name.startswith('__'), equals=False)
+                    validate("mapping args", argument.arguments[1].function_arity, equals=0)
+                    mapping[argument.arguments[0].function_name] = Predicate.parse(argument.arguments[1].function_name)
+                res += [rule.disable(), *module.instantiate(**mapping)]
 
-        if type(arg) is str:
-            arg = SymbolicProgram.parse(arg)
+            elif module_under_read is not None:
+                module_under_read[1].append(rule)
+            else:
+                res.append(rule)
 
-        if Program.submodules.get(name) is not None:
-            if str(arg) == "":
-                return
-            eprint(f"Warning: module \"{name}\" already exists. Overwriting...")
+        return SymbolicProgram.of(res)
 
-        # By default, the module is not applied (False)
-        Program.submodules[name] = (Module(name, arg), False)
+    def __str__(self):
+        return f"__module__({self.name}).\n{self.program}\n__end__."
 
+    def __repr__(self):
+        return f"Module(name={self.name}, program={self.program})"
 
-    @staticmethod
-    def apply_module(module_name: str, mapping_relation: tuple = None) -> str:
-        if module_name not in Program.submodules:
-            raise Program.NoModuleNameError(mapping_relation)
-
-        rewritten_program = Program.submodules[module_name][0].rewrite(mapping_relation)
-
-        ##### Update the tuple of the module (set applied = True) ####
-        Program.submodules[module_name] = (Program.submodules[module_name][0], True)
-        ######################### End update #########################
-
-        Program.__end_program += rewritten_program + "\n"
-        return rewritten_program
-
-    @staticmethod
-    def full_program() -> str:
-        return Program.__end_program
-
-    @staticmethod
-    def solve(arguments: Sequence[str] = []) -> list[Model]:
-        return Model.of_program(Program.__end_program, arguments=arguments)
+    def instantiate(self, **kwargs: Predicate) -> SymbolicProgram:
+        for arg in kwargs:
+            validate("kwargs", arg.startswith('__'), equals=False,
+                     help_msg="Local predicates cannot be renamed externally.")
+        static_uuid = self.__static_uuid
+        local_uuid = utils.uuid()
+        mapping = {**kwargs}
+        for predicate in self.program.predicates:
+            if not predicate.name.endswith('__'):
+                if predicate.name.startswith('__static_'):
+                    mapping[predicate.name] = Predicate.parse(f"{predicate.name[1:]}_{static_uuid}")
+                elif predicate.name.startswith('__'):
+                    mapping[predicate.name] = Predicate.parse(f"{predicate.name}_{local_uuid}")
+        return self.program.apply_predicate_renaming(**mapping)
