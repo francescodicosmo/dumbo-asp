@@ -8,6 +8,12 @@ from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicR
     SymbolicTerm, Module
 
 
+@pytest.fixture
+def patched_uuid():
+    with patch("dumbo_asp.utils.uuid", side_effect=[f"ebc40a28_de77_494a_a139_{i:012}" for i in range(1, 100)]):
+        yield
+
+
 def test_parser_error():
     with pytest.raises(Parser.Error) as err:
         Parser.parse_ground_term("\"a\nb")
@@ -505,7 +511,7 @@ __a :- not a.
     """.strip())
     module = Module(name=Module.Name.parse("main"), program=program)
     assert str(module) == """
-__module__(main).
+__module__("main").
 a :- not __a.
 __a :- not a.
 __end__.
@@ -523,12 +529,7 @@ def test_module_instantiation_cannot_rename_local_predicates():
         module.instantiate(__foo=Predicate.parse("bar"))
 
 
-@patch("dumbo_asp.utils.uuid", side_effect=[
-    "ebc40a28_de77_494a_a139_972343be51a8",
-    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
-    "ae2179b9_607d_44ed_b51c_08b590679ca1",
-])
-def test_module_instantiation(uuid_patch):
+def test_module_instantiation(patched_uuid):
     program = SymbolicProgram.parse("""
 pred :- not __false.
 __false :- not pred.
@@ -536,38 +537,33 @@ __static_foo.
     """.strip())
     module = Module(name=Module.Name.parse("main"), program=program)
     assert str(module.instantiate(pred=Predicate.parse("a"))) == f"""
-a :- not __false_29f7b13e_a41f_4de4_944a_5fb8e61b513c.
-__false_29f7b13e_a41f_4de4_944a_5fb8e61b513c :- not a.
-_static_foo_ebc40a28_de77_494a_a139_972343be51a8.
+a :- not __false_ebc40a28_de77_494a_a139_000000000002.
+__false_ebc40a28_de77_494a_a139_000000000002 :- not a.
+_static_foo_ebc40a28_de77_494a_a139_000000000001.
     """.strip()
     assert str(module.instantiate(pred=Predicate.parse("b"))) == f"""
-b :- not __false_ae2179b9_607d_44ed_b51c_08b590679ca1.
-__false_ae2179b9_607d_44ed_b51c_08b590679ca1 :- not b.
-_static_foo_ebc40a28_de77_494a_a139_972343be51a8.
+b :- not __false_ebc40a28_de77_494a_a139_000000000003.
+__false_ebc40a28_de77_494a_a139_000000000003 :- not b.
+_static_foo_ebc40a28_de77_494a_a139_000000000001.
     """.strip()
 
 
-@patch("dumbo_asp.utils.uuid", side_effect=[
-    "ebc40a28_de77_494a_a139_972343be51a8",
-    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
-    "ae2179b9_607d_44ed_b51c_08b590679ca1",
-])
-def test_module_expand_program(uuid_patch):
+def test_module_expand_program(patched_uuid):
     program = SymbolicProgram.parse("""
-__module__(choice).
+__module__("choice").
     predicate(X) :- condition(X), not __false(X).
     __false(X) :- condition(X), not predicate(X).
 __end__.
 
 edb(1..3).
-__apply_module__(choice, (predicate, a), (condition, edb)).
+__apply_module__("choice", (predicate, a), (condition, edb)).
     """)
     program = Module.expand_program(program)
     assert str(program) == """
 edb(1..3).
-%* __apply_module__(choice, (predicate, a), (condition, edb)). *%
-a(X) :- edb(X); not __false_29f7b13e_a41f_4de4_944a_5fb8e61b513c(X).
-__false_29f7b13e_a41f_4de4_944a_5fb8e61b513c(X) :- edb(X); not a(X).
+%* __apply_module__("choice", (predicate, a), (condition, edb)). *%
+a(X) :- edb(X); not __false_ebc40a28_de77_494a_a139_000000000002(X).
+__false_ebc40a28_de77_494a_a139_000000000002(X) :- edb(X); not a(X).
 %* __end__. *%
     """.strip()
 
@@ -575,9 +571,9 @@ __false_29f7b13e_a41f_4de4_944a_5fb8e61b513c(X) :- edb(X); not a(X).
 def test_module_expand_program_requires_modules_to_be_declared_before_they_are_expanded():
     program = SymbolicProgram.parse("""
 edb(1..3).
-__apply_module__(choice, (predicate, a), (condition, edb)).
+__apply_module__("choice", (predicate, a), (condition, edb)).
 
-__module__(choice).
+__module__("choice").
     predicate(X) :- condition(X), not __false(X).
     __false(X) :- condition(X), not predicate(X).
 __end__.
@@ -588,49 +584,41 @@ __end__.
 
 def test_module_expand_program_cannot_expand_a_module_inside_itself():
     program = SymbolicProgram.parse("""
-__module__(foo).
-    __apply_module__(foo).
+__module__("foo").
+    __apply_module__("foo").
 __end__.
     """)
     with pytest.raises(KeyError):
         Module.expand_program(program)
 
 
-@patch("dumbo_asp.utils.uuid", side_effect=[
-    "ebc40a28_de77_494a_a139_972343be51a8",
-    "29f7b13e_a41f_4de4_944a_5fb8e61b513c",
-    "ae2179b9_607d_44ed_b51c_08b590679ca1",
-    "c21258ac_b2ed_4d20_a7a1_ae72332b3f55",
-    "3a412a2f_5d34_4ebc_ae4b_d4a83bfd6107",
-    "88456e97_a0e1_4c79_b470_bd7eb3537561",
-])
-def test_module_expand_apply_modules_inside_modules(uuid_patch):
+def test_module_expand_apply_modules_inside_modules(patched_uuid):
     program = SymbolicProgram.parse("""
-__module__(transitive_closure).
+__module__("transitive closure").
     tc(X,Y) :- r(X,Y).
     tc(X,Z) :- tc(X,Y), r(Y,Z).
 __end__.
 
-__module__(transitive_closure_check).
-    __apply_module__(transitive_closure, (tc, __tc)).
+__module__("transitive closure check").
+    __apply_module__("transitive closure", (tc, __tc)).
     :- __tc(X,X).
 __end__.
 
 
 link(a,b).
 link(b,a).
-__apply_module__(transitive_closure_check, (r, link)).
+__apply_module__("transitive closure check", (r, link)).
     """.strip())
     program = Module.expand_program(program)
     assert str(program) == """
 link(a,b).
 link(b,a).
-%* __apply_module__(transitive_closure_check, (r, link)). *%
-%* __apply_module__(transitive_closure,(tc,__tc)). *%
-__tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Y) :- link(X,Y).
-__tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Z) :- __tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,Y); link(Y,Z).
+%* __apply_module__("transitive closure check", (r, link)). *%
+%* __apply_module__("transitive closure",(tc,__tc)). *%
+__tc_ebc40a28_de77_494a_a139_000000000004(X,Y) :- link(X,Y).
+__tc_ebc40a28_de77_494a_a139_000000000004(X,Z) :- __tc_ebc40a28_de77_494a_a139_000000000004(X,Y); link(Y,Z).
 %* __end__. *%
-#false :- __tc_c21258ac_b2ed_4d20_a7a1_ae72332b3f55(X,X).
+#false :- __tc_ebc40a28_de77_494a_a139_000000000004(X,X).
 %* __end__. *%
     """.strip()
     with pytest.raises(Model.NoModelError):

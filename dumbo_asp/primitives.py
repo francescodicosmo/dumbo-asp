@@ -2,7 +2,6 @@ import copy
 import dataclasses
 import functools
 import math
-import sys
 from dataclasses import InitVar
 from functools import cached_property, cache
 from typing import Callable, Optional, Iterable, Union, Any, Final
@@ -289,6 +288,9 @@ class SymbolicTerm:
 
     def int_value(self) -> int:
         return self.__value.symbol.number
+
+    def string_value(self) -> str:
+        return self.__value.symbol.string
 
     @property
     def function_name(self) -> str:
@@ -972,7 +974,7 @@ class Model:
         return ":- " + ", ".join([f"{atom}" for atom in self]) + '.'
 
     @cached_property
-    def __compute_substituions_control(self):
+    def __compute_substitutions_control(self):
         program = self.as_choice_rules
         control = clingo.Control()
         control.add(program)
@@ -982,11 +984,11 @@ class Model:
     def compute_substitutions(self, *, arguments: str, number_of_arguments: int,
                               conjunctive_query: str) -> tuple[list[clingo.Symbol], ...]:
         predicate: Final = f"__query_{uuid()}__"
-        self.__compute_substituions_control.add(predicate, [], f"{predicate}({arguments}) :- {conjunctive_query}.")
-        self.__compute_substituions_control.ground([(predicate, [])])
+        self.__compute_substitutions_control.add(predicate, [], f"{predicate}({arguments}) :- {conjunctive_query}.")
+        self.__compute_substitutions_control.ground([(predicate, [])])
         return tuple(
             atom.symbol.arguments
-            for atom in self.__compute_substituions_control.symbolic_atoms.by_signature(predicate, number_of_arguments)
+            for atom in self.__compute_substitutions_control.symbolic_atoms.by_signature(predicate, number_of_arguments)
         )
 
 
@@ -1004,12 +1006,9 @@ class Module:
 
         @staticmethod
         def parse(name: str) -> "Module.Name":
-            term = Parser.parse_ground_term(name)
-            validate("name", term.type, equals=clingo.SymbolType.Function)
-            validate("name", term.arguments, length=0)
-            validate("name", term.negative, equals=False)
+            term = clingo.String(name)
             return Module.Name(
-                value=term.name,
+                value=term.string,
                 key=Module.Name.__key,
             )
 
@@ -1029,9 +1028,10 @@ class Module:
             if rule.head_atom.predicate_name == "__module__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 1", rule.head_atom.predicate_arity, equals=1)
+                validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
                 validate("no nesting", module_under_read is None, equals=True)
                 validate("not seen", rule.head_atom.predicate.name not in modules, equals=True)
-                module_under_read = (rule.head_atom.arguments[0].function_name, [])
+                module_under_read = (rule.head_atom.arguments[0].string_value(), [])
             elif rule.head_atom.predicate_name == "__end__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 0", rule.head_atom.predicate_arity, equals=0)
@@ -1043,10 +1043,8 @@ class Module:
             elif rule.head_atom.predicate_name == "__apply_module__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity >= 1", rule.head_atom.predicate_arity, min_value=1)
-                validate("arg#0", rule.head_atom.arguments[0].is_function(), equals=True)
-                validate("arg#0", rule.head_atom.arguments[0].function_arity, equals=0)
-                validate("arg#0", rule.head_atom.arguments[0].function_name, is_in=modules.keys())
-                module = modules[rule.head_atom.arguments[0].function_name]
+                validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
+                module = modules[rule.head_atom.arguments[0].string_value()]
                 mapping = {}
                 for argument in rule.head_atom.arguments[1:]:
                     validate("mapping args", argument.is_function(), equals=True)
@@ -1069,10 +1067,10 @@ class Module:
         return SymbolicProgram.of(res)
 
     def __str__(self):
-        return f"__module__({self.name}).\n{self.program}\n__end__."
+        return f"""__module__("{self.name}").\n{self.program}\n__end__."""
 
     def __repr__(self):
-        return f"Module(name={self.name}, program={self.program})"
+        return f"""Module(name="{self.name}", program={self.program})"""
 
     def instantiate(self, **kwargs: Predicate) -> SymbolicProgram:
         for arg in kwargs:
