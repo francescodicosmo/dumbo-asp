@@ -513,19 +513,19 @@ class SymbolicRule:
 
         class Transformer(clingo.ast.Transformer):
             def visit_Function(self, node):
-                res.add(node.name)
+                res.add((node.name, len(node.arguments)))
                 return node
 
             def visit_Literal(self, node):
                 if "symbol" in node.atom.keys():
-                    res.add(node.atom.symbol.name)
+                    res.add((node.atom.symbol.name, len(node.atom.symbol.arguments)))
                 elif "elements" in node.atom.keys():
                     for element in node.atom.elements:
                         self.visit(element.update(terms=[]))
                 return node
 
         Transformer().visit(self.__value)
-        return tuple(Predicate.parse(pred) for pred in res)
+        return tuple(Predicate.parse(*pred) for pred in res)
 
     def disable(self) -> "SymbolicRule":
         return SymbolicRule(self.__value, self.__parsed_string, True, key=self.__key)
@@ -1019,6 +1019,42 @@ class Module:
     program: SymbolicProgram
     __static_uuid: str = dataclasses.field(default_factory=lambda: utils.uuid(), init=False)
 
+    __core_modules = {}
+
+    @staticmethod
+    def __init_core_modules__():
+        validate("called once", Module.__core_modules, max_len=0, help_msg="Cannot be called twice")
+
+        def register(name: str, program: str):
+            name = f"@dumbo/{name}"
+            assert name not in Module.__core_modules
+            Module.__core_modules[name] = Module(
+                Module.Name.parse(name),
+                Module.expand_program(SymbolicProgram.parse(program.strip())),
+            )
+
+        register("transitive closure", """
+closure(X,Y) :- relation(X,Y).
+closure(X,Z) :- closure(X,Y), relation(Y,Z).
+                """)
+        register("transitive closure guaranteed", """
+__apply_module__("@dumbo/transitive closure").
+__apply_module__("@dumbo/transitive closure", (closure, __closure)).
+:- closure(X,Y), not __closure(X,Y).
+                """)
+
+    @staticmethod
+    def core_module(name: str) -> "Module":
+        return Module.__core_modules[name]
+
+    @staticmethod
+    def is_core_module(name: str) -> bool:
+        return name in Module.__core_modules
+
+    @staticmethod
+    def core_modules() -> int:
+        return len(Module.__core_modules)
+
     @staticmethod
     def expand_program(program: SymbolicProgram) -> SymbolicProgram:
         modules = {}
@@ -1030,6 +1066,7 @@ class Module:
                 validate("arity 1", rule.head_atom.predicate_arity, equals=1)
                 validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
                 validate("no nesting", module_under_read is None, equals=True)
+                validate("not a core module", Module.is_core_module(rule.head_atom.predicate.name), equals=False)
                 validate("not seen", rule.head_atom.predicate.name not in modules, equals=True)
                 module_under_read = (rule.head_atom.arguments[0].string_value(), [])
             elif rule.head_atom.predicate_name == "__end__":
@@ -1044,7 +1081,8 @@ class Module:
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity >= 1", rule.head_atom.predicate_arity, min_value=1)
                 validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
-                module = modules[rule.head_atom.arguments[0].string_value()]
+                module_name = rule.head_atom.arguments[0].string_value()
+                module = Module.core_module(module_name) if Module.is_core_module(module_name) else modules[module_name]
                 mapping = {}
                 for argument in rule.head_atom.arguments[1:]:
                     validate("mapping args", argument.is_function(), equals=True)
@@ -1086,3 +1124,6 @@ class Module:
                 elif predicate.name.startswith('__'):
                     mapping[predicate.name] = Predicate.parse(f"{predicate.name}_{local_uuid}")
         return self.program.apply_predicate_renaming(**mapping)
+
+
+Module.__init_core_modules__()

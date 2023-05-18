@@ -10,7 +10,9 @@ from dumbo_asp.primitives import Predicate, Parser, GroundAtom, Model, SymbolicR
 
 @pytest.fixture
 def patched_uuid():
-    with patch("dumbo_asp.utils.uuid", side_effect=[f"ebc40a28_de77_494a_a139_{i:012}" for i in range(1, 100)]):
+    with patch("dumbo_asp.utils.uuid",
+               side_effect=[f"ebc40a28_de77_494a_a139_{i:012}" for i in range(1, 100)]
+               ):
         yield
 
 
@@ -214,14 +216,14 @@ b :-  a.
 
 def test_symbolic_rule_predicates():
     assert set(SymbolicRule.parse("a(X) :- b(X), not c(X).").predicates) == \
-           set(Predicate.parse(p) for p in "a b c".split())
+           set(Predicate.parse(p) for p in "a/1 b/1 c/1".split())
 
 
 def test_symbolic_program_predicates():
     assert set(SymbolicProgram.parse("""
 a(X) :- b(X), not c(X).
 :- #sum{X,d(X) : e(X)} = Y.
-    """.strip()).predicates) == set(Predicate.parse(p) for p in "a b c e".split())
+    """.strip()).predicates) == set(Predicate.parse(p) for p in "a/1 b/1 c/1 e/1".split())
 
 
 def test_symbolic_rule_head_variables():
@@ -559,11 +561,11 @@ edb(1..3).
 __apply_module__("choice", (predicate, a), (condition, edb)).
     """)
     program = Module.expand_program(program)
-    assert str(program) == """
+    assert str(program) == f"""
 edb(1..3).
 %* __apply_module__("choice", (predicate, a), (condition, edb)). *%
-a(X) :- edb(X); not __false_ebc40a28_de77_494a_a139_000000000002(X).
-__false_ebc40a28_de77_494a_a139_000000000002(X) :- edb(X); not a(X).
+a(X) :- edb(X); not __false_ebc40a28_de77_494a_a139_{2:012}(X).
+__false_ebc40a28_de77_494a_a139_{2:012}(X) :- edb(X); not a(X).
 %* __end__. *%
     """.strip()
 
@@ -623,3 +625,22 @@ __tc_ebc40a28_de77_494a_a139_000000000004(X,Z) :- __tc_ebc40a28_de77_494a_a139_0
     """.strip()
     with pytest.raises(Model.NoModelError):
         Model.of_program(program)
+
+
+def test_module_for_tc_from_core_lib():
+    program = Module.expand_program(SymbolicProgram.parse("""
+link(a,b).
+link(b,a).
+__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
+    """.strip()))
+    assert Model.of_program(program) == Model.of_atoms("link(a,b) link(b,a) link(a,a) link(b,b)".split())
+
+
+def test_module_for_transitive_closure_guaranteed():
+    program = Module.expand_program(SymbolicProgram.parse("""
+link(a,b).
+link(b,a).
+__apply_module__("@dumbo/transitive closure guaranteed", (relation, link), (closure, link)).
+    """.strip()))
+    assert Model.of_program(program).filter(when=lambda atom: atom.predicate_name == "link") == \
+           Model.of_atoms("link(a,b) link(b,a) link(a,a) link(b,b)".split())
