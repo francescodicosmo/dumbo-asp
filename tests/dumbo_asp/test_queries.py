@@ -3,7 +3,8 @@ from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 
 from dumbo_asp.primitives import SymbolicProgram, Module, Model, GroundAtom
 from dumbo_asp.queries import compute_minimal_unsatisfiable_subsets, validate_in_all_models, \
-    validate_cannot_be_true_in_any_stable_model, validate_cannot_be_extended_to_stable_model
+    validate_cannot_be_true_in_any_stable_model, validate_cannot_be_extended_to_stable_model, enumerate_models, \
+    enumerate_counter_models
 
 
 def test_compute_minimal_unsatisfiable_subsets():
@@ -29,6 +30,32 @@ a(1..3).
     res = compute_minimal_unsatisfiable_subsets(program, PositiveIntegerOrUnbounded.of_unbounded(),
                                                 over_the_ground_program=True)
     assert len(res) == 3
+
+
+def test_enumerate_models():
+    program = SymbolicProgram.parse("""
+{a; b; c; d}.
+:- c, d.
+:- not c, not d.
+    """)
+    models = enumerate_models(program, true_atoms=Model.of_atoms("a"), false_atoms=Model.of_atoms("b"))
+    assert len(models) == 2
+
+
+def test_enumerate_models_2():
+    program = SymbolicProgram.parse("""
+a :- b.
+    """)
+    models = enumerate_models(program, unknown_atoms=Model.of_atoms("a b".split()))
+    assert len(models) == 3
+
+
+def test_enumerate_counter_models():
+    program = SymbolicProgram.parse("""
+a :- b.
+    """)
+    models = enumerate_counter_models(program, Model.of_atoms("a b".split()))
+    assert len(models) == 2
 
 
 def test_validate_in_all_models_transitive_closure():
@@ -73,6 +100,22 @@ __fail :- a, not __fail.
         validate_in_all_models(program=program, false_atoms=Model.of_atoms("a".split()))
 
     validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("a"))
+
+
+def test_validate_cannot_be_true_in_any_stable_model_2():
+    program = Module.expand_program(SymbolicProgram.parse("""
+__fail :- a, not __fail.
+{a}.
+{b}.
+%:- not b.
+    """))
+
+    # with pytest.raises(ValueError):
+    #     validate_in_all_models(program=program, false_atoms=Model.of_atoms("a".split()))
+    #
+    # validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("a"))
+    validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("b"))
+    assert False
 
 
 def test_validate_cannot_be_extended_to_stable_model():

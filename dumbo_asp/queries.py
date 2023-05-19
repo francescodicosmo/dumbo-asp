@@ -64,6 +64,63 @@ def compute_minimal_unsatisfiable_subsets(
 
 
 @typeguard.typechecked
+def enumerate_models(
+        program: SymbolicProgram, *,
+        true_atoms: Iterable[GroundAtom] = (),
+        false_atoms: Iterable[GroundAtom] = (),
+        unknown_atoms: Iterable[GroundAtom] = (),
+) -> tuple[Model, ...]:
+    """
+    Enumerate models of the program that are compatible with the partial assignment.
+    Note that the program may be simplified by clingo, so you may want to specify some unknown atoms to prevent
+    such simplifications.
+    """
+    the_program = Model.of_atoms(
+        reify_program(
+            Model.of_atoms(true_atoms).as_facts +
+            '\n'.join(f":- {atom}." for atom in false_atoms) +
+            Model.of_atoms(unknown_atoms).as_choice_rules +
+            str(program)
+        )
+    ).as_facts + META_MODELS
+
+    control = clingo.Control(["0"])
+    control.add(the_program)
+    control.ground([("base", [])])
+
+    def collect(model):
+        collect.models.append(Model.of_atoms(model.symbols(shown=True)))
+    collect.models = []
+
+    control.solve(on_model=collect)
+    return tuple(collect.models)
+
+
+@typeguard.typechecked
+def enumerate_counter_models(
+        program: SymbolicProgram,
+        model: Model,
+) -> tuple[Model, ...]:
+    the_program = Model.of_atoms(
+        reify_program(
+            '\n'.join(f"#external {atom}." for atom in model) +
+            str(program)
+        )
+    ).as_facts + META_COUNTER_MODELS + '\n'.join(f"true(L) :- output({atom},B), literal_tuple(B,L)." for atom in model)
+
+    control = clingo.Control(["0"])
+    control.add(the_program)
+    control.ground([("base", [])])
+
+    def collect(model):
+        collect.models.append(Model.of_atoms(model.symbols(shown=True)))
+    collect.models = []
+
+    control.solve(on_model=collect)
+    return tuple(collect.models)
+
+
+@typeguard.typechecked
 def validate_in_all_models(
         program: SymbolicProgram, *,
         true_atoms: Iterable[GroundAtom] = (),
@@ -101,24 +158,34 @@ def validate_cannot_be_true_in_any_stable_model(
         *,
         local_prefix: str = "__",
 ) -> None:
-    global_predicates = [f"{predicate.name}({','.join(f'X' + str(i) for i in range(predicate.arity))})"
-                         for predicate in program.predicates if not predicate.name.startswith(local_prefix)]
-    the_program = Model.of_atoms(
-        reify_program(
-            f"""
-{program}
+    false_in_all_models = False
+    try:
+        validate_in_all_models(program=program, false_atoms=(atom,))
+        false_in_all_models = True
+    except ValueError:
+        pass
+    if false_in_all_models:
+        return
 
-% enforce truth of the atom (in "there" world)
-{{{atom}}}.
-:- not {atom}.
-            """
-        )
-    ).as_facts + META_HT_MODELS + """
-% not an equilibrium model
-%:- hold(L,h) : hold(L,t).
-    \n""" + '\n'.join(f"""
-%:- output({predicate},B), conjunction(B,t), not conjunction(B,h).  % instability is not due to global predicates
-    """.strip() for predicate in global_predicates) + """
+    models = enumerate_models(program, true_atoms=(atom,))
+    for model in models:
+        global_predicates = [f"{predicate.name}({','.join(f'X' + str(i) for i in range(predicate.arity))})"
+                             for predicate in program.predicates if not predicate.name.startswith(local_prefix)]
+        the_program = Model.of_atoms(
+            reify_program(
+                f"{program}\n#external {atom}.\n:- not {atom}.\n" +
+                '\n'.join(f"#external {at}.\n:- not {at}.")
+
+
+            )
+        ).as_facts + META_HT_MODELS + """
+fail :- hold(L,h) : hold(L,t).  % not an equilibrium model
+        \n""" + '\n'.join(f"""
+fail :- output({predicate},B), conjunction(B,t), not conjunction(B,h).  % instability depends on global predicates
+    """.strip() for predicate in global_predicates) + f"""
+:- not fail.  % if there is a stable model, it means that the instability (if any) depends on global predicates
+:- output({atom},B), literal_tuple(B,L), not hold(L,t).  % enforce atom in "there" world
+
 #show T : output(T,B), conjunction(B,t), not conjunction(B,h).
     """
 
@@ -129,11 +196,14 @@ def validate_cannot_be_true_in_any_stable_model(
     def collect(model):
         collect.atoms = Model.of_atoms(model.symbols(shown=True))\
             .filter(when=lambda at: at.predicate_name.startswith(local_prefix))
+        print('model', model)
     collect.atoms = None
 
+    print('solve', atom)
+    print("\n\n\n\n" + the_program + "\n\n\n\n")
     control.solve(on_model=collect)
-    validate("some witness", collect.atoms is None, equals=False,
-             help_msg=f"Instability not guaranteed by local predicates")
+    validate("some witness", collect.atoms is None, equals=True,
+             help_msg=f"Instability not guaranteed by local predicates: {collect.atoms}")
 
 
 @typeguard.typechecked
@@ -163,6 +233,39 @@ body(normal(B)) :- rule(_,normal(B)), conjunction(B).
 body(sum(B,G))  :- rule(_,sum(B,G)),
     #sum { W,L :     hold(L), weighted_literal_tuple(B, L,W), L > 0 ;
            W,L : not hold(L), weighted_literal_tuple(B,-L,W), L > 0 } >= G.
+
+  hold(A) : atom_tuple(H,A)   :- rule(disjunction(H),B), body(B).
+{ hold(A) : atom_tuple(H,A) } :- rule(     choice(H),B), body(B).
+
+#show.
+#show T : output(T,B), conjunction(B).
+
+% avoid warnings
+atom_tuple(0,0) :- #false.
+conjunction(0) :- #false.
+literal_tuple(0) :- #false.
+literal_tuple(0,0) :- #false.
+weighted_literal_tuple(0,0) :- #false.
+weighted_literal_tuple(0,0,0) :- #false.
+rule(0,0) :- #false.
+"""
+
+META_COUNTER_MODELS = """
+atom( A ) :- atom_tuple(_,A).
+atom(|L|) :-          literal_tuple(_,L).
+atom(|L|) :- weighted_literal_tuple(_,L).
+
+{hold(A)} :- atom(A), true(A).
+:- hold(A) : true(A).
+
+conjunction(B) :- literal_tuple(B),
+        hold(L) : literal_tuple(B, L), L > 0;
+    not true(L) : literal_tuple(B,-L), L > 0.
+
+body(normal(B)) :- rule(_,normal(B)), conjunction(B).
+body(sum(B,G))  :- rule(_,sum(B,G)),
+    #sum { W,L :     hold(L), weighted_literal_tuple(B, L,W), L > 0 ;
+           W,L : not true(L), weighted_literal_tuple(B,-L,W), L > 0 } >= G.
 
   hold(A) : atom_tuple(H,A)   :- rule(disjunction(H),B), body(B).
 { hold(A) : atom_tuple(H,A) } :- rule(     choice(H),B), body(B).
