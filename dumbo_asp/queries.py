@@ -8,6 +8,7 @@ from clingox.reify import reify_program
 from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 from dumbo_utils.validation import validate
 
+from dumbo_asp import utils
 from dumbo_asp.primitives import SymbolicProgram, Model, SymbolicAtom, SymbolicRule, SymbolicTerm, GroundAtom
 
 
@@ -187,10 +188,33 @@ def validate_cannot_be_extended_to_stable_model(
         *,
         true_atoms: Iterable[GroundAtom] = (),
         false_atoms: Iterable[GroundAtom] = (),
+        unknown_atoms: Iterable[GroundAtom] = (),
         local_prefix: str = "__",
 ) -> None:
-    # it may work by adding a rule like   __fail :- true_atoms, not false_atoms, not __fail.  (for __fail being fresh)
-    raise ValueError
+    false_in_all_models = False
+    try:
+        fail = f"__fail_{utils.uuid()}"
+        validate_in_all_models(program=SymbolicProgram.of(
+            (
+                *program,
+                SymbolicRule.parse(f"\n{fail} :- " + '; '.join(
+                    [f"{atom}" for atom in true_atoms] + [f"not {atom}" for atom in false_atoms]
+                ) + '.')
+            )
+        ), false_atoms=(GroundAtom.parse(fail),), unknown_atoms=(*true_atoms, *false_atoms, *unknown_atoms))
+        false_in_all_models = True
+    except ValueError:
+        pass
+    if false_in_all_models:
+        return
+
+    models = enumerate_models(program, true_atoms=true_atoms, false_atoms=false_atoms, unknown_atoms=unknown_atoms)
+    for model in models:
+        the_program = SymbolicProgram.of(
+            *program,
+            (SymbolicRule.parse(f"{at}.") for at in model if not at.predicate_name.startswith(local_prefix))
+        )
+        validate("has counter model", enumerate_counter_models(the_program, model, up_to=1), length=1)
 
 
 def __collect_models(program: str, options: list[str]) -> tuple[Model, ...]:
