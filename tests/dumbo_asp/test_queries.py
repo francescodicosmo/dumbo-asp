@@ -3,7 +3,7 @@ from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 
 from dumbo_asp.primitives import SymbolicProgram, Module, Model, GroundAtom
 from dumbo_asp.queries import compute_minimal_unsatisfiable_subsets, validate_in_all_models, \
-    validate_cannot_be_true_in_any_stable_model
+    validate_cannot_be_true_in_any_stable_model, validate_cannot_be_extended_to_stable_model
 
 
 def test_compute_minimal_unsatisfiable_subsets():
@@ -54,19 +54,39 @@ link(b,c).
         )
 
 
-def test_validate_in_all_models_transitive_closure_guaranteed():
+def test_validate_in_all_models_for_unseen_atoms():
     program = Module.expand_program(SymbolicProgram.parse("""
-__apply_module__("@dumbo/transitive closure guaranteed", (relation, link), (closure, link)).
-
+__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
 link(a,b).
-link(b,c).
     """))
 
     with pytest.raises(ValueError):
-        validate_in_all_models(program=program, true_atoms=Model.of_atoms("link(a,a)".split()))
+        validate_in_all_models(program=program, false_atoms=Model.of_atoms("link(c,d)".split()))
 
-    validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("link(a,a)"))
+
+def test_validate_cannot_be_true_in_any_stable_model():
+    program = Module.expand_program(SymbolicProgram.parse("""
+__fail :- a, not __fail.
+    """))
 
     with pytest.raises(ValueError):
-        validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("link(a,c)"))
+        validate_in_all_models(program=program, false_atoms=Model.of_atoms("a".split()))
 
+    validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("a"))
+
+
+def test_validate_cannot_be_extended_to_stable_model():
+    program = Module.expand_program(SymbolicProgram.parse("""
+{a; b}.
+__fail :- a, b, not __fail.
+__fail :- not a, not b, not __fail.
+    """))
+
+    with pytest.raises(ValueError):
+        validate_in_all_models(program=program, true_atoms=Model.of_atoms("a".split()))
+        validate_in_all_models(program=program, true_atoms=Model.of_atoms("b".split()))
+        validate_in_all_models(program=program, false_atoms=Model.of_atoms("a".split()))
+        validate_in_all_models(program=program, false_atoms=Model.of_atoms("b".split()))
+
+    validate_cannot_be_extended_to_stable_model(program=program, true_atoms=Model.of_atoms("a b".split()))
+    validate_cannot_be_extended_to_stable_model(program=program, false_atoms=Model.of_atoms("a b".split()))

@@ -82,7 +82,7 @@ def validate_in_all_models(
         control.ground([("base", [])])
 
         def collect(model):
-            collect.atoms = set(atom for atom in Model.of_atoms(model.symbols(shown=True)))
+            collect.atoms = set(at for at in Model.of_atoms(model.symbols(shown=True)))
         collect.atoms = None
 
         control.solve(on_model=collect)
@@ -109,15 +109,15 @@ def validate_cannot_be_true_in_any_stable_model(
 {program}
 
 % enforce truth of the atom (in "there" world)
-{{{atom}}}
+{{{atom}}}.
 :- not {atom}.
             """
         )
     ).as_facts + META_HT_MODELS + """
 % not an equilibrium model
-:- hold(L,h) : hold(L,t).
+%:- hold(L,h) : hold(L,t).
     \n""" + '\n'.join(f"""
-:- output({predicate},B), conjunction(B,t), not conjunction(B,h).  % instability is not due to global predicates
+%:- output({predicate},B), conjunction(B,t), not conjunction(B,h).  % instability is not due to global predicates
     """.strip() for predicate in global_predicates) + """
 #show T : output(T,B), conjunction(B,t), not conjunction(B,h).
     """
@@ -127,12 +127,25 @@ def validate_cannot_be_true_in_any_stable_model(
     control.ground([("base", [])])
 
     def collect(model):
-        collect.atoms = Model.of_atoms(model.symbols(shown=True)).filter(when=lambda at: at.predicate_name.startswith(local_prefix))
+        collect.atoms = Model.of_atoms(model.symbols(shown=True))\
+            .filter(when=lambda at: at.predicate_name.startswith(local_prefix))
     collect.atoms = None
 
     control.solve(on_model=collect)
     validate("some witness", collect.atoms is None, equals=False,
              help_msg=f"Instability not guaranteed by local predicates")
+
+
+@typeguard.typechecked
+def validate_cannot_be_extended_to_stable_model(
+        program: SymbolicProgram,
+        *,
+        true_atoms: Iterable[GroundAtom] = (),
+        false_atoms: Iterable[GroundAtom] = (),
+        local_prefix: str = "__",
+) -> None:
+    # it may work by adding a rule like   __fail :- true_atoms, not false_atoms, not __fail.  (for __fail being fresh)
+    raise ValueError
 
 
 META_MODELS = """

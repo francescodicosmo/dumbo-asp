@@ -451,7 +451,7 @@ class SymbolicRule:
 
     @property
     def head_atom(self) -> SymbolicAtom:
-        if "value" in self.__value.head.atom.keys():
+        if ("atom" in self.__value.head.keys()) and ("value" in self.__value.head.atom.keys()):
             validate("#false", self.__value.head.atom.value, equals=0)
             return SymbolicAtom.of_false()
         return SymbolicAtom.of(self.__value.head.atom.symbol)
@@ -1038,8 +1038,8 @@ closure(X,Y) :- relation(X,Y).
 closure(X,Z) :- closure(X,Y), relation(Y,Z).
                 """)
         register("transitive closure guaranteed", """
-__apply_module__("@dumbo/transitive closure").
 __apply_module__("@dumbo/transitive closure", (closure, __closure)).
+closure(X,Y) :- __closure(X,Y).
 :- closure(X,Y), not __closure(X,Y).
                 """)
 
@@ -1061,7 +1061,12 @@ __apply_module__("@dumbo/transitive closure", (closure, __closure)).
         module_under_read = None
         res = []
         for rule in program:
-            if rule.head_atom.predicate_name == "__module__":
+            if not rule.is_normal_rule:
+                if module_under_read is not None:
+                    module_under_read[1].append(rule)
+                else:
+                    res.append(rule)
+            elif rule.head_atom.predicate_name == "__module__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 1", rule.head_atom.predicate_arity, equals=1)
                 validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
