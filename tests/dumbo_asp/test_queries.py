@@ -105,17 +105,12 @@ __fail :- a, not __fail.
 def test_validate_cannot_be_true_in_any_stable_model_2():
     program = Module.expand_program(SymbolicProgram.parse("""
 __fail :- a, not __fail.
+:- not a, b.
+
 {a}.
-{b}.
-%:- not b.
     """))
 
-    # with pytest.raises(ValueError):
-    #     validate_in_all_models(program=program, false_atoms=Model.of_atoms("a".split()))
-    #
-    # validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("a"))
     validate_cannot_be_true_in_any_stable_model(program, GroundAtom.parse("b"))
-    assert False
 
 
 def test_validate_cannot_be_extended_to_stable_model():

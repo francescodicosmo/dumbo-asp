@@ -69,12 +69,15 @@ def enumerate_models(
         true_atoms: Iterable[GroundAtom] = (),
         false_atoms: Iterable[GroundAtom] = (),
         unknown_atoms: Iterable[GroundAtom] = (),
+        up_to: int = 0,
 ) -> tuple[Model, ...]:
     """
     Enumerate models of the program that are compatible with the partial assignment.
     Note that the program may be simplified by clingo, so you may want to specify some unknown atoms to prevent
     such simplifications.
     """
+    validate("up_to", up_to, min_value=0)
+
     the_program = Model.of_atoms(
         reify_program(
             Model.of_atoms(true_atoms).as_facts +
@@ -84,7 +87,7 @@ def enumerate_models(
         )
     ).as_facts + META_MODELS
 
-    control = clingo.Control(["0"])
+    control = clingo.Control([f"{up_to}"])
     control.add(the_program)
     control.ground([("base", [])])
 
@@ -100,7 +103,11 @@ def enumerate_models(
 def enumerate_counter_models(
         program: SymbolicProgram,
         model: Model,
+        *,
+        up_to: int = 0,
 ) -> tuple[Model, ...]:
+    validate("up_to", up_to, min_value=0)
+
     the_program = Model.of_atoms(
         reify_program(
             '\n'.join(f"#external {atom}." for atom in model) +
@@ -108,7 +115,7 @@ def enumerate_counter_models(
         )
     ).as_facts + META_COUNTER_MODELS + '\n'.join(f"true(L) :- output({atom},B), literal_tuple(B,L)." for atom in model)
 
-    control = clingo.Control(["0"])
+    control = clingo.Control([f"{up_to}"])
     control.add(the_program)
     control.ground([("base", [])])
 
@@ -124,11 +131,12 @@ def enumerate_counter_models(
 def validate_in_all_models(
         program: SymbolicProgram, *,
         true_atoms: Iterable[GroundAtom] = (),
-        false_atoms: Iterable[GroundAtom] = ()
+        false_atoms: Iterable[GroundAtom] = (),
+        unknown_atoms: Iterable[GroundAtom] = (),
 ) -> None:
     the_program = Model.of_atoms(
         reify_program(
-            Model.of_atoms(true_atoms, false_atoms).as_choice_rules +
+            Model.of_atoms(true_atoms, false_atoms, unknown_atoms).as_choice_rules +
             str(program)
         )
     ).as_facts + META_MODELS
@@ -156,54 +164,25 @@ def validate_cannot_be_true_in_any_stable_model(
         program: SymbolicProgram,
         atom: GroundAtom,
         *,
+        unknown_atoms: Iterable[GroundAtom] = (),
         local_prefix: str = "__",
 ) -> None:
     false_in_all_models = False
     try:
-        validate_in_all_models(program=program, false_atoms=(atom,))
+        validate_in_all_models(program=program, false_atoms=(atom,), unknown_atoms=unknown_atoms)
         false_in_all_models = True
     except ValueError:
         pass
     if false_in_all_models:
         return
 
-    models = enumerate_models(program, true_atoms=(atom,))
+    models = enumerate_models(program, true_atoms=(atom,), unknown_atoms=unknown_atoms)
     for model in models:
-        global_predicates = [f"{predicate.name}({','.join(f'X' + str(i) for i in range(predicate.arity))})"
-                             for predicate in program.predicates if not predicate.name.startswith(local_prefix)]
-        the_program = Model.of_atoms(
-            reify_program(
-                f"{program}\n#external {atom}.\n:- not {atom}.\n" +
-                '\n'.join(f"#external {at}.\n:- not {at}.")
-
-
-            )
-        ).as_facts + META_HT_MODELS + """
-fail :- hold(L,h) : hold(L,t).  % not an equilibrium model
-        \n""" + '\n'.join(f"""
-fail :- output({predicate},B), conjunction(B,t), not conjunction(B,h).  % instability depends on global predicates
-    """.strip() for predicate in global_predicates) + f"""
-:- not fail.  % if there is a stable model, it means that the instability (if any) depends on global predicates
-:- output({atom},B), literal_tuple(B,L), not hold(L,t).  % enforce atom in "there" world
-
-#show T : output(T,B), conjunction(B,t), not conjunction(B,h).
-    """
-
-    control = clingo.Control()
-    control.add(the_program)
-    control.ground([("base", [])])
-
-    def collect(model):
-        collect.atoms = Model.of_atoms(model.symbols(shown=True))\
-            .filter(when=lambda at: at.predicate_name.startswith(local_prefix))
-        print('model', model)
-    collect.atoms = None
-
-    print('solve', atom)
-    print("\n\n\n\n" + the_program + "\n\n\n\n")
-    control.solve(on_model=collect)
-    validate("some witness", collect.atoms is None, equals=True,
-             help_msg=f"Instability not guaranteed by local predicates: {collect.atoms}")
+        the_program = SymbolicProgram.of(
+            *program,
+            (SymbolicRule.parse(f"{at}.") for at in model if not at.predicate_name.startswith(local_prefix))
+        )
+        validate("has counter model", enumerate_counter_models(the_program, model, up_to=1), length=1)
 
 
 @typeguard.typechecked
