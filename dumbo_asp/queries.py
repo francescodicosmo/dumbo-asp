@@ -152,6 +152,38 @@ def validate_in_all_models(
 
 
 @typeguard.typechecked
+def validate_in_all_models_of_the_reduct(
+        program: SymbolicProgram, *,
+        model: Model,
+        true_atoms: Iterable[GroundAtom] = (),
+) -> None:
+
+    the_program = Model.of_atoms(
+        reify_program(
+            '\n'.join(f"#external {atom}." for atom in model) +
+            str(program)
+        )
+    ).as_facts + META_REDUCT_MODELS + '\n'.join(f"true(L) :- output({atom},B), literal_tuple(B,L)." for atom in model)
+
+    def check(atoms):
+        control = clingo.Control(["--enum-mode=cautious"])
+        control.add(the_program)
+        control.ground([("base", [])])
+
+        def collect(model):
+            collect.atoms = set(atom for atom in Model.of_atoms(model.symbols(shown=True)))
+        collect.atoms = None
+
+        control.solve(on_model=collect)
+
+        for atom in atoms:
+            validate(f"True atom", atom in collect.atoms, equals=True,
+                     help_msg=f"Atom {atom} was expected to be true in all models")
+
+    check(true_atoms)
+
+
+@typeguard.typechecked
 def validate_cannot_be_true_in_any_stable_model(
         program: SymbolicProgram,
         atom: GroundAtom,
@@ -235,7 +267,7 @@ body(sum(B,G))  :- rule(_,sum(B,G)),
            W,L : not hold(L), weighted_literal_tuple(B,-L,W), L > 0 } >= G.
 
   hold(A) : atom_tuple(H,A)   :- rule(disjunction(H),B), body(B).
-{ hold(A) : atom_tuple(H,A) } :- rule(     choice(H),B), body(B).
+{ hold(A) : atom_tuple(H,A) } :- rule(choice(H),B), body(B).
 
 #show.
 #show T : output(T,B), conjunction(B).
@@ -257,6 +289,39 @@ atom(|L|) :- weighted_literal_tuple(_,L).
 
 {hold(A)} :- atom(A), true(A).
 :- hold(A) : true(A).
+
+conjunction(B) :- literal_tuple(B),
+        hold(L) : literal_tuple(B, L), L > 0;
+    not true(L) : literal_tuple(B,-L), L > 0.
+
+body(normal(B)) :- rule(_,normal(B)), conjunction(B).
+body(sum(B,G))  :- rule(_,sum(B,G)),
+    #sum { W,L :     hold(L), weighted_literal_tuple(B, L,W), L > 0 ;
+           W,L : not true(L), weighted_literal_tuple(B,-L,W), L > 0 } >= G.
+
+  hold(A) : atom_tuple(H,A)   :- rule(disjunction(H),B), body(B).
+{ hold(A) : atom_tuple(H,A) } :- rule(     choice(H),B), body(B).
+
+#show.
+#show T : output(T,B), conjunction(B).
+
+% avoid warnings
+atom_tuple(0,0) :- #false.
+conjunction(0) :- #false.
+literal_tuple(0) :- #false.
+literal_tuple(0,0) :- #false.
+weighted_literal_tuple(0,0) :- #false.
+weighted_literal_tuple(0,0,0) :- #false.
+rule(0,0) :- #false.
+"""
+
+META_REDUCT_MODELS = """
+atom( A ) :- atom_tuple(_,A).
+atom(|L|) :-          literal_tuple(_,L).
+atom(|L|) :- weighted_literal_tuple(_,L).
+
+{hold(A)} :- atom(A), true(A).
+:- not hold(A), true(A).
 
 conjunction(B) :- literal_tuple(B),
         hold(L) : literal_tuple(B, L), L > 0;

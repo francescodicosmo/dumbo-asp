@@ -4,7 +4,7 @@ from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 from dumbo_asp.primitives import SymbolicProgram, Module, Model, GroundAtom
 from dumbo_asp.queries import compute_minimal_unsatisfiable_subsets, validate_in_all_models, \
     validate_cannot_be_true_in_any_stable_model, validate_cannot_be_extended_to_stable_model, enumerate_models, \
-    enumerate_counter_models
+    enumerate_counter_models, validate_in_all_models_of_the_reduct
 
 
 def test_compute_minimal_unsatisfiable_subsets():
@@ -78,6 +78,50 @@ link(b,c).
         validate_in_all_models(
             program=program,
             false_atoms=Model.of_atoms("link(a,a)".split()),
+        )
+
+
+def test_validate_in_all_models_of_the_reduct_transitive_closure():
+    program = Module.expand_program(SymbolicProgram.parse("""
+__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
+    """))
+
+    validate_in_all_models_of_the_reduct(
+        program=program,
+        model=Model.of_atoms("link(a,b) link(b,c)".split()),
+        true_atoms=Model.of_atoms("link(a,c)".split()),
+    )
+
+    validate_in_all_models_of_the_reduct(
+        program=program,
+        model=Model.of_atoms("link(a,b) link(b,c)".split()),
+        true_atoms=Model.of_atoms("link(a,b) link(b,c) link(a,c)".split()),
+    )
+
+    validate_in_all_models_of_the_reduct(
+        program=program,
+        model=Model.of_atoms("link(a,b) link(b,c) link(c,d)".split()),
+        true_atoms=Model.of_atoms("link(a,b) link(b,c) link(a,c) link(a,d)".split()),
+    )
+
+    validate_in_all_models_of_the_reduct(
+        program=program,
+        model=Model.of_atoms("link(a,b) link(b,c) link(c,d) link(d,a)".split()),
+        true_atoms=Model.of_atoms("link(b,a) link(c,a) link(a,a)".split()),
+    )
+
+    with pytest.raises(ValueError):
+        validate_in_all_models_of_the_reduct(
+            program=program,
+            model=Model.of_atoms("link(a,b) link(b,c)".split()),
+            true_atoms=Model.of_atoms("link(a,a)".split()),
+        )
+
+    with pytest.raises(ValueError):
+        validate_in_all_models_of_the_reduct(
+            program=program,
+            model=Model.of_atoms("link(a,b) link(b,c) link(c,d)".split()),
+            true_atoms=Model.of_atoms("link(b,b)".split()),
         )
 
 
