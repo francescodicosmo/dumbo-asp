@@ -87,16 +87,7 @@ def enumerate_models(
         )
     ).as_facts + META_MODELS
 
-    control = clingo.Control([f"{up_to}"])
-    control.add(the_program)
-    control.ground([("base", [])])
-
-    def collect(model):
-        collect.models.append(Model.of_atoms(model.symbols(shown=True)))
-    collect.models = []
-
-    control.solve(on_model=collect)
-    return tuple(collect.models)
+    return __collect_models(the_program, [f"{up_to}"])
 
 
 @typeguard.typechecked
@@ -115,16 +106,7 @@ def enumerate_counter_models(
         )
     ).as_facts + META_COUNTER_MODELS + '\n'.join(f"true(L) :- output({atom},B), literal_tuple(B,L)." for atom in model)
 
-    control = clingo.Control([f"{up_to}"])
-    control.add(the_program)
-    control.ground([("base", [])])
-
-    def collect(model):
-        collect.models.append(Model.of_atoms(model.symbols(shown=True)))
-    collect.models = []
-
-    control.solve(on_model=collect)
-    return tuple(collect.models)
+    return __collect_models(the_program, [f"{up_to}"])
 
 
 @typeguard.typechecked
@@ -142,17 +124,11 @@ def validate_in_all_models(
     ).as_facts + META_MODELS
 
     def check(mode: bool, atoms):
-        control = clingo.Control(["--enum-mode=cautious" if mode else "--enum-mode=brave"])
-        control.add(the_program)
-        control.ground([("base", [])])
-
-        def collect(model):
-            collect.atoms = set(at for at in Model.of_atoms(model.symbols(shown=True)))
-        collect.atoms = None
-
-        control.solve(on_model=collect)
+        consequences = set(
+            at for at in __collect_models(the_program, ["--enum-mode=cautious" if mode else "--enum-mode=brave"])[-1]
+        )
         for atom in atoms:
-            validate(f"{mode} atom", atom in collect.atoms, equals=mode,
+            validate(f"{mode} atom", atom in consequences, equals=mode,
                      help_msg=f"Atom {atom} was expected to be {str(mode).lower()} in all models")
 
     check(True, true_atoms)
@@ -165,30 +141,18 @@ def validate_in_all_models_of_the_reduct(
         model: Model,
         true_atoms: Iterable[GroundAtom] = (),
 ) -> None:
-
     the_program = Model.of_atoms(
         reify_program(
             '\n'.join(f"#external {atom}." for atom in model) +
             str(program)
         )
     ).as_facts + META_REDUCT_MODELS + '\n'.join(f"true(L) :- output({atom},B), literal_tuple(B,L)." for atom in model)
-
-    def check(atoms):
-        control = clingo.Control(["--enum-mode=cautious"])
-        control.add(the_program)
-        control.ground([("base", [])])
-
-        def collect(model):
-            collect.atoms = set(atom for atom in Model.of_atoms(model.symbols(shown=True)))
-        collect.atoms = None
-
-        control.solve(on_model=collect)
-
-        for atom in atoms:
-            validate(f"True atom", atom in collect.atoms, equals=True,
-                     help_msg=f"Atom {atom} was expected to be true in all models")
-
-    check(true_atoms)
+    consequences = set(
+        at for at in __collect_models(the_program, ["--enum-mode=cautious"])[-1]
+    )
+    for atom in true_atoms:
+        validate(f"True atom", atom in consequences, equals=True,
+                 help_msg=f"Atom {atom} was expected to be true in all models")
 
 
 @typeguard.typechecked
@@ -227,6 +191,19 @@ def validate_cannot_be_extended_to_stable_model(
 ) -> None:
     # it may work by adding a rule like   __fail :- true_atoms, not false_atoms, not __fail.  (for __fail being fresh)
     raise ValueError
+
+
+def __collect_models(program: str, options: list[str]) -> tuple[Model, ...]:
+    control = clingo.Control(options)
+    control.add(program)
+    control.ground([("base", [])])
+    res = []
+
+    def collect(model):
+        res.append(Model.of_atoms(model.symbols(shown=True)))
+
+    control.solve(on_model=collect)
+    return tuple(res)
 
 
 META_MODELS = """
