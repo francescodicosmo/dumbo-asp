@@ -655,5 +655,17 @@ def test_billion_laughs_attack():
                   for i in range(n)) +
         f"""\n__apply_module__("lol{n}").""")
     with pytest.raises(ValueError):
-        p = Module.expand_program(program, limit=10)
-        print(len(p))
+        Module.expand_program(program, limit=10)
+
+
+def test_spanning_tree():
+    program = SymbolicProgram.parse("""
+link(2,1).  
+link(2,3).
+__apply_module__("@dumbo/collect arguments (arity 2)", (input, link), (output, node)).
+__apply_module__("@dumbo/symmetric closure", (relation, link), (closure, link)).
+__apply_module__("@dumbo/spanning tree of undirected graph").
+    """)
+    program = Module.expand_program(program)
+    assert Model.of_program(program).filter(when=lambda atom: atom.predicate_name == "tree") == \
+           Model.of_atoms("tree(1,2) tree(2,3)".split())

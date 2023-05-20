@@ -1025,7 +1025,8 @@ class Module:
     def __init_core_modules__():
         validate("called once", Module.__core_modules, max_len=0, help_msg="Cannot be called twice")
 
-        def register(name: str, program: str):
+        def register(module: str):
+            name, program = module.strip().split('\n', maxsplit=1)
             name = f"@dumbo/{name}"
             assert name not in Module.__core_modules
             Module.__core_modules[name] = Module(
@@ -1033,15 +1034,62 @@ class Module:
                 Module.expand_program(SymbolicProgram.parse(program.strip())),
             )
 
-        register("transitive closure", """
-closure(X,Y) :- relation(X,Y).
-closure(X,Z) :- closure(X,Y), relation(Y,Z).
-                """)
-        register("transitive closure guaranteed", """
-__apply_module__("@dumbo/transitive closure", (closure, __closure)).
-closure(X,Y) :- __closure(X,Y).
-:- closure(X,Y), not __closure(X,Y).
-                """)
+        def register_all(modules: str, *, sep="----"):
+            for module in modules.strip().split(sep):
+                if module:
+                    lines = [line[4:] if index > 0 and len(line) >= 4 else line
+                             for index, line in enumerate(module.strip().split('\n'))]
+                    register('\n'.join(lines))
+
+        for arity in range(10):
+            terms = ','.join('X' + str(i) for i in range(arity))
+            register(f"""
+exact copy (arity {arity})
+output({terms}) :- input({terms}).
+:- output({terms}), not input({terms}).
+            """)
+            if arity > 0:
+                register(f"collect arguments (arity {arity})\n" +
+                         '\n'.join(f"output(X{index}) :- input({terms})." for index in range(arity)))
+
+        register_all("""
+symmetric closure
+    closure(X,Y) :- relation(X,Y).
+    closure(X,Y) :- relation(Y,X).
+----
+
+symmetric closure guaranteed
+    __apply_module__("@dumbo/symmetric closure", (closure, __closure)).
+    __apply_module__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
+----
+
+reachable nodes
+    reach(X) :- start(X).
+    reach(Y) :- reach(X), link(X,Y).
+----
+
+connected graph
+    __start(X) :- X = #min{Y : node(Y)}.
+    __apply_module__("@dumbo/reachable nodes", (start, __start), (reach, __reach)).
+    :- node(X), not __reach(X).
+----
+
+transitive closure
+    closure(X,Y) :- relation(X,Y).
+    closure(X,Z) :- closure(X,Y), relation(Y,Z).
+----
+
+transitive closure guaranteed
+    __apply_module__("@dumbo/transitive closure", (closure, __closure)).
+    __apply_module__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
+----
+
+spanning tree of undirected graph
+    {tree(X,Y) : link(X,Y), X < Y} = C - 1 :- C = #count{X : node(X)}.
+    __apply_module__("@dumbo/symmetric closure", (relation, tree), (closure, __tree)).
+    __apply_module__("@dumbo/connected graph", (link, __tree)).
+----
+        """)
 
     @staticmethod
     def core_module(name: str) -> "Module":
