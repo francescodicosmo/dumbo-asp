@@ -994,7 +994,7 @@ class Model:
 
 @typeguard.typechecked
 @dataclasses.dataclass(frozen=True)
-class Module:
+class Template:
     @dataclasses.dataclass(frozen=True)
     class Name:
         value: str
@@ -1005,40 +1005,40 @@ class Module:
             self.__key.validate(key)
 
         @staticmethod
-        def parse(name: str) -> "Module.Name":
+        def parse(name: str) -> "Template.Name":
             term = clingo.String(name)
-            return Module.Name(
+            return Template.Name(
                 value=term.string,
-                key=Module.Name.__key,
+                key=Template.Name.__key,
             )
 
         def __str__(self):
             return self.value
 
-    name: "Module.Name"
+    name: "Template.Name"
     program: SymbolicProgram
     __static_uuid: str = dataclasses.field(default_factory=lambda: utils.uuid(), init=False)
 
-    __core_modules = {}
+    __core_templates = {}
 
     @staticmethod
-    def __init_core_modules__():
-        validate("called once", Module.__core_modules, max_len=0, help_msg="Cannot be called twice")
+    def __init_core_templates__():
+        validate("called once", Template.__core_templates, max_len=0, help_msg="Cannot be called twice")
 
-        def register(module: str):
-            name, program = module.strip().split('\n', maxsplit=1)
+        def register(template: str):
+            name, program = template.strip().split('\n', maxsplit=1)
             name = f"@dumbo/{name}"
-            assert name not in Module.__core_modules
-            Module.__core_modules[name] = Module(
-                Module.Name.parse(name),
-                Module.expand_program(SymbolicProgram.parse(program.strip())),
+            assert name not in Template.__core_templates
+            Template.__core_templates[name] = Template(
+                Template.Name.parse(name),
+                Template.expand_program(SymbolicProgram.parse(program.strip())),
             )
 
-        def register_all(modules: str, *, sep="----"):
-            for module in modules.strip().split(sep):
-                if module:
+        def register_all(templates: str, *, sep="----"):
+            for template in templates.strip().split(sep):
+                if template:
                     lines = [line[4:] if index > 0 and len(line) >= 4 else line
-                             for index, line in enumerate(module.strip().split('\n'))]
+                             for index, line in enumerate(template.strip().split('\n'))]
                     register('\n'.join(lines))
 
         for arity in range(10):
@@ -1059,8 +1059,8 @@ symmetric closure
 ----
 
 symmetric closure guaranteed
-    __apply_module__("@dumbo/symmetric closure", (closure, __closure)).
-    __apply_module__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
+    __apply_template__("@dumbo/symmetric closure", (closure, __closure)).
+    __apply_template__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
 ----
 
 reachable nodes
@@ -1070,7 +1070,7 @@ reachable nodes
 
 connected graph
     __start(X) :- X = #min{Y : node(Y)}.
-    __apply_module__("@dumbo/reachable nodes", (start, __start), (reach, __reach)).
+    __apply_template__("@dumbo/reachable nodes", (start, __start), (reach, __reach)).
     :- node(X), not __reach(X).
 ----
 
@@ -1080,67 +1080,68 @@ transitive closure
 ----
 
 transitive closure guaranteed
-    __apply_module__("@dumbo/transitive closure", (closure, __closure)).
-    __apply_module__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
+    __apply_template__("@dumbo/transitive closure", (closure, __closure)).
+    __apply_template__("@dumbo/exact copy (arity 2)", (input, __closure), (output, closure)).
 ----
 
 spanning tree of undirected graph
     {tree(X,Y) : link(X,Y), X < Y} = C - 1 :- C = #count{X : node(X)}.
-    __apply_module__("@dumbo/symmetric closure", (relation, tree), (closure, __tree)).
-    __apply_module__("@dumbo/connected graph", (link, __tree)).
+    __apply_template__("@dumbo/symmetric closure", (relation, tree), (closure, __tree)).
+    __apply_template__("@dumbo/connected graph", (link, __tree)).
 ----
         """)
 
     @staticmethod
-    def core_module(name: str) -> "Module":
-        return Module.__core_modules[name]
+    def core_template(name: str) -> "Template":
+        return Template.__core_templates[name]
 
     @staticmethod
-    def is_core_module(name: str) -> bool:
-        return name in Module.__core_modules
+    def is_core_template(name: str) -> bool:
+        return name in Template.__core_templates
 
     @staticmethod
-    def core_modules() -> int:
-        return len(Module.__core_modules)
+    def core_templates() -> int:
+        return len(Template.__core_templates)
 
     @staticmethod
     def expand_program(program: SymbolicProgram, *, limit: int = 100_000, trace: bool = False) -> SymbolicProgram:
-        modules = {}
-        module_under_read = None
+        templates = {}
+        template_under_read = None
         res = []
         for rule in program:
-            validate("avoid blow up", len(res) + (len(module_under_read[1]) if module_under_read else 0),
+            validate("avoid blow up", len(res) + (len(template_under_read[1]) if template_under_read else 0),
                      max_value=limit,
                      help_msg=f"The expansion takes more than {limit} rules. "
                               f"If you trust the code, try again by increasing the limit.")
             if rule.disabled or not rule.is_normal_rule:
-                if module_under_read is not None:
-                    module_under_read[1].append(rule)
+                if template_under_read is not None:
+                    template_under_read[1].append(rule)
                 else:
                     res.append(rule)
-            elif rule.head_atom.predicate_name == "__module__":
+            elif rule.head_atom.predicate_name == "__template__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 1", rule.head_atom.predicate_arity, equals=1)
                 validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
-                validate("no nesting", module_under_read is None, equals=True)
-                validate("not a core module", Module.is_core_module(rule.head_atom.predicate.name), equals=False)
-                validate("not seen", rule.head_atom.predicate.name not in modules, equals=True)
-                module_under_read = (rule.head_atom.arguments[0].string_value(), [])
+                validate("no nesting", template_under_read is None, equals=True)
+                validate("not a core template", Template.is_core_template(rule.head_atom.predicate.name), equals=False)
+                validate("not seen", rule.head_atom.predicate.name not in templates, equals=True)
+                template_under_read = (rule.head_atom.arguments[0].string_value(), [])
             elif rule.head_atom.predicate_name == "__end__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 0", rule.head_atom.predicate_arity, equals=0)
-                validate("not in a module", module_under_read)
+                validate("not in a template", template_under_read)
                 if trace:
-                    module_under_read[1].append(rule.disable())
-                modules[module_under_read[0]] = Module(name=Module.Name.parse(module_under_read[0]),
-                                                       program=SymbolicProgram.of(module_under_read[1]))
-                module_under_read = None
-            elif rule.head_atom.predicate_name == "__apply_module__":
+                    template_under_read[1].append(rule.disable())
+                templates[template_under_read[0]] = Template(name=Template.Name.parse(template_under_read[0]),
+                                                             program=SymbolicProgram.of(template_under_read[1]))
+                template_under_read = None
+            elif rule.head_atom.predicate_name == "__apply_template__":
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity >= 1", rule.head_atom.predicate_arity, min_value=1)
                 validate("arg#0", rule.head_atom.arguments[0].is_string(), equals=True)
-                module_name = rule.head_atom.arguments[0].string_value()
-                module = Module.core_module(module_name) if Module.is_core_module(module_name) else modules[module_name]
+                template_name = rule.head_atom.arguments[0].string_value()
+                template = Template.core_template(template_name) if Template.is_core_template(template_name) \
+                    else templates[template_name]
                 mapping = {}
                 for argument in rule.head_atom.arguments[1:]:
                     validate("mapping args", argument.is_function(), equals=True)
@@ -1151,26 +1152,26 @@ spanning tree of undirected graph
                     validate("mapping args", argument.arguments[1].is_function(), equals=True)
                     validate("mapping args", argument.arguments[1].function_arity, equals=0)
                     mapping[argument.arguments[0].function_name] = Predicate.parse(argument.arguments[1].function_name)
-                if module_under_read is None:
+                if template_under_read is None:
                     if trace:
                         res.append(rule.disable())
-                    res.extend(r for r in module.instantiate(**mapping))
+                    res.extend(r for r in template.instantiate(**mapping))
                 else:
                     if trace:
-                        module_under_read[1].append(rule.disable())
-                    module_under_read[1].extend(r for r in module.instantiate(**mapping))
-            elif module_under_read is not None:
-                module_under_read[1].append(rule)
+                        template_under_read[1].append(rule.disable())
+                    template_under_read[1].extend(r for r in template.instantiate(**mapping))
+            elif template_under_read is not None:
+                template_under_read[1].append(rule)
             else:
                 res.append(rule)
 
         return SymbolicProgram.of(res)
 
     def __str__(self):
-        return f"""__module__("{self.name}").\n{self.program}\n__end__."""
+        return f"""__template__("{self.name}").\n{self.program}\n__end__."""
 
     def __repr__(self):
-        return f"""Module(name="{self.name}", program={self.program})"""
+        return f"""Template(name="{self.name}", program={self.program})"""
 
     def instantiate(self, **kwargs: Predicate) -> SymbolicProgram:
         for arg in kwargs:
@@ -1188,4 +1189,4 @@ spanning tree of undirected graph
         return self.program.apply_predicate_renaming(**mapping)
 
 
-Module.__init_core_modules__()
+Template.__init_core_templates__()

@@ -1,7 +1,7 @@
 import pytest
 from dumbo_utils.primitives import PositiveIntegerOrUnbounded
 
-from dumbo_asp.primitives import SymbolicProgram, Module, Model, GroundAtom
+from dumbo_asp.primitives import SymbolicProgram, Template, Model, GroundAtom
 from dumbo_asp.queries import compute_minimal_unsatisfiable_subsets, validate_in_all_models, \
     validate_cannot_be_true_in_any_stable_model, validate_cannot_be_extended_to_stable_model, enumerate_models, \
     enumerate_counter_models, validate_in_all_models_of_the_reduct
@@ -59,8 +59,8 @@ a :- b.
 
 
 def test_validate_in_all_models_transitive_closure():
-    program = Module.expand_program(SymbolicProgram.parse("""
-__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
+    program = Template.expand_program(SymbolicProgram.parse("""
+__apply_template__("@dumbo/transitive closure", (relation, link), (closure, link)).
 
 link(a,b).
 link(b,c).
@@ -82,8 +82,8 @@ link(b,c).
 
 
 def test_validate_in_all_models_of_the_reduct_transitive_closure():
-    program = Module.expand_program(SymbolicProgram.parse("""
-__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
+    program = Template.expand_program(SymbolicProgram.parse("""
+__apply_template__("@dumbo/transitive closure", (relation, link), (closure, link)).
     """))
 
     validate_in_all_models_of_the_reduct(
@@ -126,8 +126,8 @@ __apply_module__("@dumbo/transitive closure", (relation, link), (closure, link))
 
 
 def test_validate_in_all_models_for_unseen_atoms():
-    program = Module.expand_program(SymbolicProgram.parse("""
-__apply_module__("@dumbo/transitive closure", (relation, link), (closure, link)).
+    program = Template.expand_program(SymbolicProgram.parse("""
+__apply_template__("@dumbo/transitive closure", (relation, link), (closure, link)).
 link(a,b).
     """))
 
@@ -136,7 +136,7 @@ link(a,b).
 
 
 def test_validate_cannot_be_true_in_any_stable_model():
-    program = Module.expand_program(SymbolicProgram.parse("""
+    program = Template.expand_program(SymbolicProgram.parse("""
 __fail :- a, not __fail.
     """))
 
@@ -147,7 +147,7 @@ __fail :- a, not __fail.
 
 
 def test_validate_cannot_be_true_in_any_stable_model_2():
-    program = Module.expand_program(SymbolicProgram.parse("""
+    program = Template.expand_program(SymbolicProgram.parse("""
 __fail :- a, not __fail.
 :- not a, b.
 
@@ -158,7 +158,7 @@ __fail :- a, not __fail.
 
 
 def test_validate_cannot_be_extended_to_stable_model():
-    program = Module.expand_program(SymbolicProgram.parse("""
+    program = Template.expand_program(SymbolicProgram.parse("""
 {a; b}.
 __fail :- a, b, not __fail.
 __fail :- not a, not b, not __fail.
