@@ -1,3 +1,4 @@
+from builtins import ValueError
 from unittest.mock import patch
 
 import clingo
@@ -560,7 +561,7 @@ __end__.
 edb(1..3).
 __apply_module__("choice", (predicate, a), (condition, edb)).
     """)
-    program = Module.expand_program(program)
+    program = Module.expand_program(program, trace=True)
     assert str(program) == f"""
 edb(1..3).
 %* __apply_module__("choice", (predicate, a), (condition, edb)). *%
@@ -611,7 +612,7 @@ link(a,b).
 link(b,a).
 __apply_module__("transitive closure check", (r, link)).
     """.strip())
-    program = Module.expand_program(program)
+    program = Module.expand_program(program, trace=True)
     assert str(program) == """
 link(a,b).
 link(b,a).
@@ -644,3 +645,15 @@ __apply_module__("@dumbo/transitive closure guaranteed", (relation, link), (clos
     """.strip()))
     assert Model.of_program(program).filter(when=lambda atom: atom.predicate_name == "link") == \
            Model.of_atoms("link(a,b) link(b,a) link(a,a) link(b,b)".split())
+
+
+def test_billion_laughs_attack():
+    n = 4
+    program = SymbolicProgram.parse(
+        """__module__("lol0"). lol. __end__.\n""" +
+        '\n'.join(f"""__module__("lol{i+1}"). __apply_module__("lol{i}"). __apply_module__("lol{i}"). __end__."""
+                  for i in range(n)) +
+        f"""\n__apply_module__("lol{n}").""")
+    with pytest.raises(ValueError):
+        p = Module.expand_program(program, limit=10)
+        print(len(p))

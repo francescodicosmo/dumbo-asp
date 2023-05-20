@@ -1056,12 +1056,16 @@ closure(X,Y) :- __closure(X,Y).
         return len(Module.__core_modules)
 
     @staticmethod
-    def expand_program(program: SymbolicProgram) -> SymbolicProgram:
+    def expand_program(program: SymbolicProgram, *, limit: int = 100_000, trace: bool = False) -> SymbolicProgram:
         modules = {}
         module_under_read = None
         res = []
         for rule in program:
-            if not rule.is_normal_rule:
+            validate("avoid blow up", len(res) + (len(module_under_read[1]) if module_under_read else 0),
+                     max_value=limit,
+                     help_msg=f"The expansion takes more than {limit} rules. "
+                              f"If you trust the code, try again by increasing the limit.")
+            if rule.disabled or not rule.is_normal_rule:
                 if module_under_read is not None:
                     module_under_read[1].append(rule)
                 else:
@@ -1078,7 +1082,8 @@ closure(X,Y) :- __closure(X,Y).
                 validate("empty body", rule.is_fact, equals=True)
                 validate("arity 0", rule.head_atom.predicate_arity, equals=0)
                 validate("not in a module", module_under_read)
-                module_under_read[1].append(rule.disable())
+                if trace:
+                    module_under_read[1].append(rule.disable())
                 modules[module_under_read[0]] = Module(name=Module.Name.parse(module_under_read[0]),
                                                        program=SymbolicProgram.of(module_under_read[1]))
                 module_under_read = None
@@ -1099,9 +1104,13 @@ closure(X,Y) :- __closure(X,Y).
                     validate("mapping args", argument.arguments[1].function_arity, equals=0)
                     mapping[argument.arguments[0].function_name] = Predicate.parse(argument.arguments[1].function_name)
                 if module_under_read is None:
-                    res += [rule.disable(), *module.instantiate(**mapping)]
+                    if trace:
+                        res.append(rule.disable())
+                    res.extend(r for r in module.instantiate(**mapping))
                 else:
-                    module_under_read[1].extend([rule.disable(), *module.instantiate(**mapping)])
+                    if trace:
+                        module_under_read[1].append(rule.disable())
+                    module_under_read[1].extend(r for r in module.instantiate(**mapping))
             elif module_under_read is not None:
                 module_under_read[1].append(rule)
             else:
