@@ -1104,6 +1104,13 @@ spanning tree of undirected graph
         return len(Template.__core_templates)
 
     @staticmethod
+    def core_templates_as_parsable_string() -> str:
+        res = []
+        for key, value in Template.__core_templates.items():
+            res.append(str(value))
+        return '\n'.join(res)
+
+    @staticmethod
     def expand_program(program: SymbolicProgram, *, limit: int = 100_000, trace: bool = False) -> SymbolicProgram:
         templates = {}
         template_under_read = None

@@ -6,6 +6,7 @@ import clingo
 import typeguard
 from clingox.reify import reify_program
 from dumbo_utils.primitives import PositiveIntegerOrUnbounded
+from dumbo_utils.url import compress_object_for_url
 from dumbo_utils.validation import validate
 
 from dumbo_asp import utils
@@ -228,6 +229,18 @@ def __collect_models(program: str, options: list[str]) -> tuple[Model, ...]:
 
     control.solve(on_model=collect)
     return tuple(res)
+
+
+@typeguard.typechecked
+def pack_asp_chef_url(recipe: str, the_input: str | Model | Iterable[Model]) -> str:
+    if type(the_input) == Model:
+        the_input = the_input.as_facts
+    elif type(the_input) != str:
+        the_input = '§'.join(model.as_facts for model in the_input)
+    url = recipe.replace("/#", "/open#", 1)
+    url = url.replace(r"#.*;", "#", 1)
+    url = url.replace("#", "#" + compress_object_for_url({"input": the_input}, suffix="") + ";", 1)
+    return url
 
 
 META_MODELS = """
